@@ -111,10 +111,30 @@ them only with `AGENT_ALLOW_DESTRUCTIVE=true` (default **off**), the engagement 
 opt in (confirm + "allow destructive"), and the orchestrator still asks you to **approve each
 run**. With any of those missing, the brain `deny`s them before they are ever requested.
 
+## Unattended operation (continuous monitoring · kill-switch · audit)
+
+Built for running on its own and being driven from a phone:
+
+- **Continuous monitoring** — `POST /api/monitors` (same body as an engagement plus
+  `intervalMs`) schedules a recon re-run on an interval. Cross-run dedupe means the bot
+  pings you **only when a finding is new** — a quiet monitor means nothing changed.
+  `GET /api/monitors` lists active ones; `POST /api/monitors/:id/stop` ends one. Monitors
+  are durable and `resume()` re-arms them after a restart. The dashboard has "Start +
+  monitor" and an Active-monitors panel.
+- **Kill-switch** — `POST /api/killswitch {"action":"engage","reason":"…"}` halts
+  everything: new engagements are refused (`503`), the in-flight loop throws at its next
+  scan, scheduled monitors skip their cycles, and all pending approvals are auto-denied.
+  The flag is **durable and fail-safe** — a restart stays halted until
+  `{"action":"clear"}`. `GET /api/killswitch` reports state; the dashboard shows a
+  Live/HALTED banner with a one-click toggle.
+- **Audit log** — every consequential action and decision (intake, scan dispatch, each
+  approval request/approve/deny/timeout, new findings, kill-switch and monitor changes) is
+  recorded append-only. `GET /api/audit?tail=N`; shown on the dashboard.
+
 ## Test
 
 ```bash
-npm test                        # node --test: approvals, intake, llm, run (policy mapping)
+npm test                        # node --test: approvals, intake, llm, run, audit, killswitch, monitor, …
 ```
 
 See the local-lab E2E in `Extension/chrome-boiler/test-targets.sh` (Juice Shop / DVWA /
@@ -128,6 +148,9 @@ WebGoat) to exercise the full flow against authorized targets.
 - `lib/intake.js` — URLs + rules → fail-closed scope + policy
 - `lib/run.js` — wires the bundled brain's `runReconLoop`
 - `lib/bot.js` — Telegram long-poll + Discord webhook
+- `lib/monitor.js` — scheduled recurring runs (new-only alerts, durable, kill-switch-aware)
+- `lib/killswitch.js` — durable fail-safe emergency halt
+- `lib/audit.js` — append-only action/decision log
 - `lib/store.js` — atomic JSON persistence
 - `scripts/bundle-brain.mjs` — esbuild bundle of the extension brain
 - `web/index.html` — single-file dashboard
