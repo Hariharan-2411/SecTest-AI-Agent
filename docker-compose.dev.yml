@@ -1,0 +1,11 @@
+# Dev override: run the CURRENT source without a full image rebuild. The images
+# already carry the tool binaries; this overlays the latest JS so code changes
+# take effect immediately. (mitmproxy isn't in the image → Full evidence falls
+# back to Light until a real rebuild.)
+services:
+  agent:
+    volumes:
+      - ../Extension/chrome-boiler/agent:/app
+  orchestrator:
+    volumes:
+      - ./:/app
