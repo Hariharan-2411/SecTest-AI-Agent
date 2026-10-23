@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import * as brain from './vendor/brain.mjs';
 import { collection } from './lib/store.js';
+import { createEventBus } from './lib/events.js';
 import { createAuditLog } from './lib/audit.js';
 import { createKillSwitch } from './lib/killswitch.js';
 import { createApprovalBroker } from './lib/approvals.js';
@@ -33,7 +34,8 @@ const evidenceStore = collection('evidence');
 const auditStore = collection('audit');
 const killswitchStore = collection('killswitch');
 
-const audit = createAuditLog({ store: auditStore });
+const bus = createEventBus();
+const audit = createAuditLog({ store: auditStore, emit: (rec) => bus.emit({ kind: 'audit', ...rec }) });
 const killswitch = createKillSwitch({ store: killswitchStore, audit });
 const broker = createApprovalBroker({
   store: approvalsStore,
@@ -55,9 +57,11 @@ function json(res, code, body) {
 function readBody(req) {
   return new Promise((r) => { let d = ''; req.on('data', (c) => (d += c)); req.on('end', () => { try { r(d ? JSON.parse(d) : {}); } catch { r({}); } }); });
 }
-function authed(req) {
+function authed(req, url) {
   if (!DASH_TOKEN) return true; // no token configured → open (dev)
-  return (req.headers['x-dashboard-token'] || '') === DASH_TOKEN;
+  // Header for fetch(); query param for EventSource (which can't set headers).
+  if ((req.headers['x-dashboard-token'] || '') === DASH_TOKEN) return true;
+  return url && url.searchParams.get('token') === DASH_TOKEN;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -74,7 +78,18 @@ const server = http.createServer(async (req, res) => {
 
   // --- API (token-gated) ---
   if (path.startsWith('/api/')) {
-    if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+    if (!authed(req, url)) return json(res, 401, { error: 'unauthorized' });
+
+    // Live update stream — one nudge per audit event; the client re-pulls on each.
+    if (path === '/api/events' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      res.write('retry: 3000\n\n');
+      const unsub = bus.subscribe((e) => { try { res.write(`data: ${JSON.stringify(e)}\n\n`); } catch (_) {} });
+      const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch (_) {} }, 25000);
+      if (typeof hb.unref === 'function') hb.unref();
+      req.on('close', () => { clearInterval(hb); unsub(); });
+      return; // keep the connection open
+    }
 
     if (path === '/api/killswitch' && req.method === 'GET') return json(res, 200, killswitch.state());
     if (path === '/api/killswitch' && req.method === 'POST') {

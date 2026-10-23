@@ -32,7 +32,7 @@
 <body>
 <div class="grid">
   <div>
-    <h1>Iris Orchestrator</h1>
+    <h1>Iris Orchestrator <span id="live" class="sub" style="font-size:12px;font-weight:400">○ connecting</span></h1>
     <p class="sub">Scope-gated recon · safe auto-runs · active/destructive steps ask you first · nothing auto-submits</p>
     <label>Dashboard token</label>
     <input id="token" placeholder="x-dashboard-token" />
@@ -148,7 +148,18 @@ async function refresh(){
       `<div class="item"><span class="tag">${c.severity||'?'}</span> <b>${c.title||c.id}</b><br><span class="sub">${(c.steps||[]).length} steps${c.rationale?(' · '+c.rationale):''}</span></div>`).join('') || '<p class="sub">none</p>';
   } catch(_){}
 }
-setInterval(refresh, 5000); refresh();
+let es;
+function connectSSE(){
+  try { if (es) es.close(); } catch(_){}
+  const q = tok() ? ('?token=' + encodeURIComponent(tok())) : '';
+  es = new EventSource('/api/events' + q);
+  es.onmessage = () => refresh();           // any event → re-pull the lists
+  es.onopen = () => { const d=$('live'); if(d){ d.textContent='● live'; d.style.color='var(--ok)'; } };
+  es.onerror = () => { const d=$('live'); if(d){ d.textContent='○ reconnecting'; d.style.color='var(--muted)'; } }; // EventSource auto-retries
+}
+$('token').addEventListener('change', connectSSE);
+setInterval(refresh, 15000); // fallback poll; SSE handles the live updates
+connectSSE(); refresh();
 </script>
 </body>
 </html>
