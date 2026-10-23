@@ -14,6 +14,7 @@ import { createLlm, createCritic } from './lib/llm.js';
 import { createBot } from './lib/bot.js';
 import { createRunner } from './lib/run.js';
 import { buildEngagement } from './lib/intake.js';
+import { renderReport } from './lib/report.js';
 
 const env = process.env;
 const PORT = Number(env.PORT || 8790);
@@ -82,6 +83,13 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/runs' && req.method === 'GET') return json(res, 200, runsStore.all());
     if (path === '/api/findings' && req.method === 'GET') return json(res, 200, findingsStore.all());
     if (path === '/api/chains' && req.method === 'GET') return json(res, 200, chainsStore.all());
+    const mRep = path.match(/^\/api\/report\/(.+)$/);
+    if (mRep && req.method === 'GET') {
+      const id = decodeURIComponent(mRep[1]);
+      const item = findingsStore.get(id) || chainsStore.get(id);
+      if (!item) return json(res, 404, { error: 'not_found' });
+      return json(res, 200, { id, markdown: renderReport(item) });
+    }
     return json(res, 404, { error: 'not_found' });
   }
   json(res, 404, { error: 'not_found' });
