@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import * as brain from './vendor/brain.mjs';
 import { collection } from './lib/store.js';
 import { createAuditLog } from './lib/audit.js';
+import { createKillSwitch } from './lib/killswitch.js';
 import { createApprovalBroker } from './lib/approvals.js';
 import { createLlm, createCritic } from './lib/llm.js';
 import { createBot } from './lib/bot.js';
@@ -29,8 +30,10 @@ const chainsStore = collection('chains');
 const fingerprintsStore = collection('fingerprints');
 const evidenceStore = collection('evidence');
 const auditStore = collection('audit');
+const killswitchStore = collection('killswitch');
 
 const audit = createAuditLog({ store: auditStore });
+const killswitch = createKillSwitch({ store: killswitchStore, audit });
 const broker = createApprovalBroker({
   store: approvalsStore,
   notify: (rec) => bot.notifyApproval(rec),
@@ -40,7 +43,7 @@ const broker = createApprovalBroker({
 const llm = createLlm(env);
 const critic = createCritic(env);
 const bot = createBot({ env, broker });
-const runner = createRunner({ env, broker, llm, critic, bot, audit, runs: runsStore, findingsStore, chainsStore, fingerprintsStore, evidenceStore });
+const runner = createRunner({ env, broker, llm, critic, bot, audit, killswitch, runs: runsStore, findingsStore, chainsStore, fingerprintsStore, evidenceStore });
 
 function json(res, code, body) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
@@ -70,7 +73,20 @@ const server = http.createServer(async (req, res) => {
   if (path.startsWith('/api/')) {
     if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
 
+    if (path === '/api/killswitch' && req.method === 'GET') return json(res, 200, killswitch.state());
+    if (path === '/api/killswitch' && req.method === 'POST') {
+      const body = await readBody(req);
+      if (body.action === 'engage') {
+        const st = killswitch.engage(body.reason || '', 'dashboard');
+        const denied = broker.denyAll('killswitch'); // release any suspended runs, fail-safe
+        return json(res, 200, { ...st, deniedPending: denied });
+      }
+      if (body.action === 'clear') return json(res, 200, killswitch.clear('dashboard'));
+      return json(res, 400, { error: 'action must be engage|clear' });
+    }
+
     if (path === '/api/engagements' && req.method === 'POST') {
+      if (killswitch.engaged()) return json(res, 503, { error: 'kill_switch_engaged' });
       const body = await readBody(req);
       let engagement;
       try {
