@@ -1,0 +1,27 @@
+# Local vulnerable lab for the live E2E test. Juice Shop joins the iris network so
+# the agent reaches it by service name (http://juiceshop:3000). AUTHORIZED target:
+# it's a deliberately vulnerable app running on your own machine.
+services:
+  juiceshop:
+    image: bkimminich/juice-shop
+    expose:
+      - "3000"
+    networks: [iris]
+  wp-db:
+    image: mariadb:11
+    environment:
+      - MARIADB_DATABASE=wp
+      - MARIADB_USER=wp
+      - MARIADB_PASSWORD=wp
+      - MARIADB_ROOT_PASSWORD=root
+    networks: [iris]
+  wordpress:
+    image: wordpress:latest
+    environment:
+      - WORDPRESS_DB_HOST=wp-db
+      - WORDPRESS_DB_USER=wp
+      - WORDPRESS_DB_PASSWORD=wp
+      - WORDPRESS_DB_NAME=wp
+    depends_on: [wp-db]
+    expose: ["80"]
+    networks: [iris]

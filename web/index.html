@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Iris Orchestrator</title>
+<style>
+  :root { --bg:#f7f8fb; --card:#fff; --ink:#1a1d29; --muted:#5b6172; --accent:#3B5BDB; --line:#e5e8f0;
+          --ok:#1f9d55; --warn:#c77700; --deny:#d64545; }
+  @media (prefers-color-scheme: dark){ :root{ --bg:#11131a; --card:#1a1d29; --ink:#e8eaf2; --muted:#9aa1b5; --line:#2a2e3d; } }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif;padding:16px}
+  h1{font-size:20px;margin:0 0 4px} .sub{color:var(--muted);margin:0 0 16px}
+  .grid{display:grid;gap:16px;grid-template-columns:1fr;max-width:860px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+  label{display:block;font-size:13px;color:var(--muted);margin:8px 0 4px}
+  input,textarea,button{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;width:100%}
+  textarea{min-height:70px} .row{display:flex;gap:8px;align-items:center} .row input[type=checkbox]{width:auto}
+  button{background:var(--accent);color:#fff;border:none;cursor:pointer;width:auto;padding:8px 16px;margin-top:10px}
+  button.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+  button.deny{background:var(--deny)} button.ok{background:var(--ok)}
+  .item{border-top:1px solid var(--line);padding:10px 0} .item:first-child{border-top:none}
+  .tag{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--line);color:var(--muted)}
+  .pending{color:var(--warn);font-weight:600} code{background:var(--line);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="grid">
+  <div>
+    <h1>Iris Orchestrator</h1>
+    <p class="sub">Scope-gated recon · safe auto-runs · active/destructive steps ask you first · nothing auto-submits</p>
+    <label>Dashboard token</label>
+    <input id="token" placeholder="x-dashboard-token" />
+  </div>
+
+  <div class="card">
+    <h3>New engagement</h3>
+    <label>Target URL(s) — one per line</label>
+    <textarea id="urls" placeholder="https://app.example.com"></textarea>
+    <label>Out-of-scope URL(s) — one per line (optional)</label>
+    <textarea id="oos" placeholder="https://admin.example.com"></textarea>
+    <label>Program rules / regulations (paste the policy text)</label>
+    <textarea id="rules" placeholder="e.g. Automated scanning is allowed. No DoS. ..."></textarea>
+    <div class="row"><input type="checkbox" id="subs" /><label style="margin:0">Enumerate subdomains (adds *.host)</label></div>
+    <div class="row"><input type="checkbox" id="confirm" /><label style="margin:0">I confirm this policy (required to enable active tools)</label></div>
+    <div class="row"><input type="checkbox" id="destructive" /><label style="margin:0">Also allow destructive tools (explicit opt-in)</label></div>
+    <div class="row"><input type="checkbox" id="fullev" /><label style="margin:0">Full evidence (capture request/response via proxy) — else Light (command + output)</label></div>
+    <button onclick="startRun()">Start</button>
+    <pre id="startOut" class="sub"></pre>
+  </div>
+
+  <div class="card"><h3>Pending approvals <button class="ghost" onclick="refresh()">↻</button></h3><div id="approvals"></div></div>
+  <div class="card"><h3>Runs</h3><div id="runs"></div></div>
+  <div class="card"><h3>Findings</h3><div id="findings"></div></div>
+  <div class="card"><h3>Chain hypotheses <span class="tag">verify before reporting</span></h3><div id="chains"></div></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const tok = () => $('token').value.trim();
+const H = () => ({ 'Content-Type': 'application/json', 'x-dashboard-token': tok() });
+async function startRun(){
+  const body = {
+    name: 'engagement-' + Date.now(),
+    urls: $('urls').value.split('\n').map(s=>s.trim()).filter(Boolean),
+    outOfScopeUrls: $('oos').value.split('\n').map(s=>s.trim()).filter(Boolean),
+    rulesText: $('rules').value,
+    enumerateSubdomains: $('subs').checked,
+    confirmed: $('confirm').checked,
+    allowDestructive: $('destructive').checked,
+    evidenceMode: $('fullev').checked ? 'full' : 'light',
+  };
+  const r = await fetch('/api/engagements', { method:'POST', headers:H(), body:JSON.stringify(body) });
+  const j = await r.json();
+  $('startOut').textContent = JSON.stringify(j.engagement ? { scope:j.engagement.scope, policy:j.engagement.policy, warnings:j.engagement.warnings } : j, null, 2);
+  refresh();
+}
+async function decide(id, d){ await fetch(`/api/approvals/${id}/${d}`, { method:'POST', headers:H() }); refresh(); }
+async function refresh(){
+  try {
+    const [ap, ru, fi, ch] = await Promise.all([
+      fetch('/api/approvals',{headers:H()}).then(r=>r.json()),
+      fetch('/api/runs',{headers:H()}).then(r=>r.json()),
+      fetch('/api/findings',{headers:H()}).then(r=>r.json()),
+      fetch('/api/chains',{headers:H()}).then(r=>r.json()),
+    ]);
+    $('approvals').innerHTML = (ap||[]).filter(a=>a.status==='pending').map(a=>
+      `<div class="item"><span class="pending">PENDING</span> <code>${a.call?.tool}</code> → ${a.call?.target} <span class="tag">${a.risk}</span><br>
+       <button class="ok" onclick="decide('${a.id}','approve')">Approve</button>
+       <button class="deny" onclick="decide('${a.id}','deny')">Deny</button></div>`).join('') || '<p class="sub">none</p>';
+    $('runs').innerHTML = (ru||[]).slice(-8).reverse().map(r=>
+      `<div class="item"><b>${r.name||r.id}</b> <span class="tag">${r.status}</span> ${r.counts?('· '+r.counts.ranked+' ranked / '+r.counts.reportworthy+' reportworthy'):''}</div>`).join('') || '<p class="sub">none</p>';
+    $('findings').innerHTML = (fi||[]).slice(-20).reverse().map(f=>
+      `<div class="item"><span class="tag">${f.severity||'info'}</span> ${f.title||f.name||f.id}<br><span class="sub">${f.target||f.host||''}</span></div>`).join('') || '<p class="sub">none</p>';
+    $('chains').innerHTML = (ch||[]).slice(-12).reverse().map(c=>
+      `<div class="item"><span class="tag">${c.severity||'?'}</span> <b>${c.title||c.id}</b><br><span class="sub">${(c.steps||[]).length} steps${c.rationale?(' · '+c.rationale):''}</span></div>`).join('') || '<p class="sub">none</p>';
+  } catch(_){}
+}
+setInterval(refresh, 5000); refresh();
+</script>
+</body>
+</html>

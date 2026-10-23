@@ -1,0 +1,54 @@
+services:
+  agent:
+    build:
+      context: ../Extension/chrome-boiler/agent
+    environment:
+      - AGENT_TOKEN=${AGENT_TOKEN:?set AGENT_TOKEN in .env}
+      - AGENT_ALLOW_ACTIVE=true
+      - AGENT_ALLOW_DESTRUCTIVE=${AGENT_ALLOW_DESTRUCTIVE:-false}
+    expose:
+      - "8787"
+    volumes:
+      - agent-data:/app/data
+    networks: [iris]
+
+  orchestrator:
+    build:
+      context: .
+    depends_on: [agent]
+    environment:
+      - PORT=8790
+      - AGENT_URL=http://agent:8787
+      - AGENT_TOKEN=${AGENT_TOKEN:?set AGENT_TOKEN in .env}
+      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - RECON_BUDGET=${RECON_BUDGET:-12}
+      - CRITIC_PROVIDER=${CRITIC_PROVIDER:-}
+      - CRITIC_MODEL=${CRITIC_MODEL:-}
+      - CRITIC_API_KEY=${CRITIC_API_KEY:-}
+      - CRITIC_BASE_URL=${CRITIC_BASE_URL:-}
+      - LLM_FALLBACK_PROVIDER=${LLM_FALLBACK_PROVIDER:-}
+      - LLM_FALLBACK_BASE_URL=${LLM_FALLBACK_BASE_URL:-}
+      - LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-}
+      - LLM_FALLBACK_API_KEY=${LLM_FALLBACK_API_KEY:-}
+      - CRITIC_FALLBACK_PROVIDER=${CRITIC_FALLBACK_PROVIDER:-}
+      - CRITIC_FALLBACK_BASE_URL=${CRITIC_FALLBACK_BASE_URL:-}
+      - CRITIC_FALLBACK_MODEL=${CRITIC_FALLBACK_MODEL:-}
+      - CRITIC_FALLBACK_API_KEY=${CRITIC_FALLBACK_API_KEY:-}
+    ports:
+      - "127.0.0.1:8790:8790"   # dashboard only on loopback by default
+    volumes:
+      - orch-data:/app/data
+    networks: [iris]
+
+volumes:
+  agent-data:
+  orch-data:
+networks:
+  iris: {}
