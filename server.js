@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import * as brain from './vendor/brain.mjs';
 import { collection } from './lib/store.js';
+import { createAuditLog } from './lib/audit.js';
 import { createApprovalBroker } from './lib/approvals.js';
 import { createLlm, createCritic } from './lib/llm.js';
 import { createBot } from './lib/bot.js';
@@ -27,16 +28,19 @@ const findingsStore = collection('findings');
 const chainsStore = collection('chains');
 const fingerprintsStore = collection('fingerprints');
 const evidenceStore = collection('evidence');
+const auditStore = collection('audit');
 
+const audit = createAuditLog({ store: auditStore });
 const broker = createApprovalBroker({
   store: approvalsStore,
   notify: (rec) => bot.notifyApproval(rec),
+  audit,
   timeoutMs: Number(env.APPROVAL_TIMEOUT_MS || 30 * 60 * 1000),
 });
 const llm = createLlm(env);
 const critic = createCritic(env);
 const bot = createBot({ env, broker });
-const runner = createRunner({ env, broker, llm, critic, bot, runs: runsStore, findingsStore, chainsStore, fingerprintsStore, evidenceStore });
+const runner = createRunner({ env, broker, llm, critic, bot, audit, runs: runsStore, findingsStore, chainsStore, fingerprintsStore, evidenceStore });
 
 function json(res, code, body) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
@@ -72,9 +76,14 @@ const server = http.createServer(async (req, res) => {
       try {
         engagement = buildEngagement(body, { hostFromUrl: brain.hostFromUrl, parseScopeText: brain.parseScopeText });
       } catch (e) { return json(res, 400, { error: String(e) }); }
+      audit.record('engagement.created', { name: engagement.name, scope: engagement.scope, evidenceMode: engagement.evidenceMode }, 'intake');
       // Kick the run; don't block the HTTP response on the whole loop.
       runner.runEngagement(engagement).catch(() => {});
       return json(res, 202, { accepted: true, engagement });
+    }
+    if (path === '/api/audit' && req.method === 'GET') {
+      const n = Number(url.searchParams.get('tail') || 0);
+      return json(res, 200, n > 0 ? audit.tail(n) : audit.all());
     }
     if (path === '/api/approvals' && req.method === 'GET') return json(res, 200, broker.list());
     const m = path.match(/^\/api\/approvals\/([^/]+)\/(approve|deny)$/);

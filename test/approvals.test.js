@@ -52,6 +52,20 @@ test('timeout auto-denies (fail-safe)', async () => {
   assert.equal(store.get(id).status, 'timeout');
 });
 
+test('records request and decision to the audit log when one is injected', async () => {
+  const store = memStore();
+  const events = [];
+  const audit = { record: (type, detail, actor) => events.push({ type, detail, actor }) };
+  const b = createApprovalBroker({ store, audit });
+  const p = b.request({ tool: 'sqlmap', target: 'app.example.com', risk: 'destructive' });
+  const [id] = b.pendingIds();
+  b.approve(id, 'tester');
+  await p;
+  assert.deepEqual(events.map((e) => e.type), ['approval.requested', 'approval.approve']);
+  assert.equal(events[0].detail.risk, 'destructive');
+  assert.equal(events[1].actor, 'tester');
+});
+
 test('settling an unknown/already-settled id is a no-op', async () => {
   const store = memStore();
   const b = createApprovalBroker({ store });
