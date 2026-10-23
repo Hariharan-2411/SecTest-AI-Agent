@@ -15,6 +15,7 @@ import { createApprovalBroker } from './lib/approvals.js';
 import { createLlm, createCritic } from './lib/llm.js';
 import { createBot } from './lib/bot.js';
 import { createRunner } from './lib/run.js';
+import { createMonitor } from './lib/monitor.js';
 import { buildEngagement } from './lib/intake.js';
 import { renderReport } from './lib/report.js';
 
@@ -44,6 +45,8 @@ const llm = createLlm(env);
 const critic = createCritic(env);
 const bot = createBot({ env, broker });
 const runner = createRunner({ env, broker, llm, critic, bot, audit, killswitch, runs: runsStore, findingsStore, chainsStore, fingerprintsStore, evidenceStore });
+const monitorsStore = collection('monitors');
+const monitor = createMonitor({ runner, store: monitorsStore, audit, killswitch });
 
 function json(res, code, body) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
@@ -101,6 +104,22 @@ const server = http.createServer(async (req, res) => {
       const n = Number(url.searchParams.get('tail') || 0);
       return json(res, 200, n > 0 ? audit.tail(n) : audit.all());
     }
+
+    if (path === '/api/monitors' && req.method === 'GET') return json(res, 200, monitor.list());
+    if (path === '/api/monitors' && req.method === 'POST') {
+      if (killswitch.engaged()) return json(res, 503, { error: 'kill_switch_engaged' });
+      const body = await readBody(req);
+      let engagement;
+      try {
+        engagement = buildEngagement(body, { hostFromUrl: brain.hostFromUrl, parseScopeText: brain.parseScopeText });
+      } catch (e) { return json(res, 400, { error: String(e) }); }
+      const interval = Math.max(Number(body.intervalMs || 6 * 60 * 60 * 1000), 60 * 1000); // floor 60s
+      const mon = monitor.schedule(engagement, interval);
+      if (body.runNow !== false) monitor.runCycle(mon.id).catch(() => {}); // kick an immediate baseline cycle
+      return json(res, 201, mon);
+    }
+    const mStop = path.match(/^\/api\/monitors\/([^/]+)\/stop$/);
+    if (mStop && req.method === 'POST') return json(res, 200, { ok: monitor.stop(mStop[1]) });
     if (path === '/api/approvals' && req.method === 'GET') return json(res, 200, broker.list());
     const m = path.match(/^\/api\/approvals\/([^/]+)\/(approve|deny)$/);
     if (m && req.method === 'POST') {
@@ -132,4 +151,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Iris Orchestrator on :${PORT}  (agent=${env.AGENT_URL}  llm=${llm.provider}  telegram=${bot.enabled.telegram})`);
   bot.startPolling().catch(() => {});
+  monitor.resume(); // re-arm any monitors that were active before a restart
+  if (killswitch.engaged()) console.warn('⚠ kill-switch is ENGAGED — runs are halted until cleared via POST /api/killswitch');
 });
