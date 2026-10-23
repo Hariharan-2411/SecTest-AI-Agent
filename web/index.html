@@ -44,6 +44,14 @@
   </div>
 
   <div class="card">
+    <h3>Import program scope <span class="tag">HackerOne · Bugcrowd · text</span></h3>
+    <label>Paste the program's scope (structured JSON or a plain scope block)</label>
+    <textarea id="scopeText" placeholder='Paste HackerOne/Bugcrowd scope JSON, or:&#10;In scope&#10;- *.example.com&#10;Out of scope&#10;- admin.example.com'></textarea>
+    <button class="ghost" onclick="importScope()">Parse &amp; fill below</button>
+    <pre id="importOut" class="sub"></pre>
+  </div>
+
+  <div class="card">
     <h3>New engagement</h3>
     <label>Target URL(s) — one per line</label>
     <textarea id="urls" placeholder="https://app.example.com"></textarea>
@@ -95,6 +103,21 @@ async function startRun(monitor){
   const j = await r.json();
   $('startOut').textContent = JSON.stringify(j.engagement ? { scope:j.engagement.scope, policy:j.engagement.policy, warnings:j.engagement.warnings } : j, null, 2);
   refresh();
+}
+async function importScope(){
+  const text = $('scopeText').value;
+  if(!text.trim()){ $('importOut').textContent='paste a scope block first'; return; }
+  try{
+    const r = await fetch('/api/scope/import', { method:'POST', headers:H(), body:JSON.stringify({ text }) });
+    const j = await r.json();
+    $('urls').value = (j.urls||[]).join('\n');
+    $('oos').value = (j.outOfScopeUrls||[]).join('\n');
+    $('subs').checked = !!j.enumerateSubdomains;
+    const lines = [`source: ${j.source} · ${ (j.urls||[]).length } in-scope · ${ (j.outOfScopeUrls||[]).length } out-of-scope`];
+    if(j.enumerateSubdomains) lines.push('wildcard detected → subdomain enumeration enabled');
+    for(const w of (j.warnings||[])) lines.push('⚠ '+w);
+    $('importOut').textContent = lines.join('\n');
+  }catch(e){ $('importOut').textContent='import error'; }
 }
 async function toggleKill(){
   const engaged = $('ks').classList.contains('halted');

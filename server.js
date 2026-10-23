@@ -18,6 +18,7 @@ import { createBot } from './lib/bot.js';
 import { createRunner } from './lib/run.js';
 import { createMonitor } from './lib/monitor.js';
 import { buildEngagement } from './lib/intake.js';
+import { importScope } from './lib/scopeImport.js';
 import { renderReport } from './lib/report.js';
 
 const env = process.env;
@@ -118,6 +119,11 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/audit' && req.method === 'GET') {
       const n = Number(url.searchParams.get('tail') || 0);
       return json(res, 200, n > 0 ? audit.tail(n) : audit.all());
+    }
+
+    if (path === '/api/scope/import' && req.method === 'POST') {
+      const body = await readBody(req);
+      return json(res, 200, importScope(body.text != null ? body.text : body));
     }
 
     if (path === '/api/monitors' && req.method === 'GET') return json(res, 200, monitor.list());

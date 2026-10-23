@@ -101,6 +101,23 @@ The dashboard also lists pending approvals with Approve/Deny buttons, and **upda
 over Server-Sent Events (`GET /api/events`) — a header shows `● live` — falling back to a
 slow poll if the stream drops.
 
+## Scope import
+
+`POST /api/scope/import {"text":"…"}` parses a program's scope into the arrays intake
+consumes — no run is started, it's a preview. It sniffs the format:
+
+- **HackerOne** structured scopes (`data[].attributes`, `structured_scopes[]`, or a bare
+  array of `asset_identifier`/`asset_type`) — `eligible_for_submission:false` entries go
+  out-of-scope.
+- **Bugcrowd** `{in_scope:[…], out_of_scope:[…]}` / `targets[]` (strings or `{target,category}`).
+- **Plain text** scope blocks with "In scope" / "Out of scope" headers, markdown bullets
+  and backticks.
+
+Wildcards (`*.example.com`) become the bare host **plus** auto-enabled subdomain
+enumeration. Non-web assets (mobile app ids, source repos, CIDR ranges, hardware) are
+dropped with a warning — this is a web recon tool. The dashboard has a "Paste scope →
+Parse & fill" box that populates the engagement form.
+
 ## Scope & policy (fail closed)
 
 Intake turns URLs + rules text into `{inScope, outOfScope}` + a policy. Active tools are
@@ -149,6 +166,7 @@ WebGoat) to exercise the full flow against authorized targets.
 - `lib/llm.js` — provider-agnostic LLM client (+ safety preamble)
 - `lib/approvals.js` — approval broker (suspend-until-human, timeout = deny)
 - `lib/intake.js` — URLs + rules → fail-closed scope + policy
+- `lib/scopeImport.js` — HackerOne/Bugcrowd/text scope → engagement fields
 - `lib/run.js` — wires the bundled brain's `runReconLoop`
 - `lib/bot.js` — Telegram long-poll + Discord/Slack webhooks
 - `lib/events.js` — in-process event bus → live dashboard (SSE `GET /api/events`)
