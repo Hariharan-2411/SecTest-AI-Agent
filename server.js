@@ -26,6 +26,7 @@ const runsStore = collection('runs');
 const findingsStore = collection('findings');
 const chainsStore = collection('chains');
 const fingerprintsStore = collection('fingerprints');
+const evidenceStore = collection('evidence');
 
 const broker = createApprovalBroker({
   store: approvalsStore,
@@ -35,7 +36,7 @@ const broker = createApprovalBroker({
 const llm = createLlm(env);
 const critic = createCritic(env);
 const bot = createBot({ env, broker });
-const runner = createRunner({ env, broker, llm, critic, bot, runs: runsStore, findingsStore, chainsStore, fingerprintsStore });
+const runner = createRunner({ env, broker, llm, critic, bot, runs: runsStore, findingsStore, chainsStore, fingerprintsStore, evidenceStore });
 
 function json(res, code, body) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
@@ -90,6 +91,13 @@ const server = http.createServer(async (req, res) => {
       const item = findingsStore.get(id) || chainsStore.get(id);
       if (!item) return json(res, 404, { error: 'not_found' });
       return json(res, 200, { id, markdown: renderReport(item) });
+    }
+    const mEv = path.match(/^\/api\/findings\/(.+)\/evidence$/);
+    if (mEv && req.method === 'GET') {
+      const f = findingsStore.get(decodeURIComponent(mEv[1]));
+      if (!f) return json(res, 404, { error: 'not_found' });
+      const ev = evidenceStore.get(f.runId);
+      return json(res, 200, { findingId: f.id, runId: f.runId, evidence: (ev && ev.items) || [] });
     }
     return json(res, 404, { error: 'not_found' });
   }

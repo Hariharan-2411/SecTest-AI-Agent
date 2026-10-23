@@ -74,6 +74,10 @@ async function startRun(){
   refresh();
 }
 async function decide(id, d){ await fetch(`/api/approvals/${id}/${d}`, { method:'POST', headers:H() }); refresh(); }
+async function showEvidence(id){
+  try{ const r=await fetch('/api/findings/'+encodeURIComponent(id)+'/evidence',{headers:H()}); const j=await r.json();
+    alert((j.evidence||[]).map(e=>`[${e.tool}] ${e.command}\n${(e.excerpt||'').slice(0,500)}`).join('\n\n---\n\n')||'no evidence'); }catch(e){ alert('evidence error'); }
+}
 async function copyReport(id){
   try{ const r=await fetch('/api/report/'+encodeURIComponent(id),{headers:H()}); const j=await r.json();
     if(j.markdown){ await navigator.clipboard.writeText(j.markdown).catch(()=>{}); alert('Report copied to clipboard'); }
@@ -94,7 +98,7 @@ async function refresh(){
     $('runs').innerHTML = (ru||[]).slice(-8).reverse().map(r=>
       `<div class="item"><b>${r.name||r.id}</b> <span class="tag">${r.status}</span> ${r.counts?('· '+r.counts.ranked+' ranked / '+r.counts.reportworthy+' reportworthy'):''}</div>`).join('') || '<p class="sub">none</p>';
     $('findings').innerHTML = (fi||[]).slice(-20).reverse().map(f=>
-      `<div class="item"><span class="tag">${f.severity||'info'}</span> ${f.title||f.name||f.id} <button class="ghost" onclick="copyReport('${f.id}')">Copy report</button><br><span class="sub">${f.target||f.host||''}${f.status?(' · '+f.status):''}</span></div>`).join('') || '<p class="sub">none</p>';
+      `<div class="item"><span class="tag">${f.severity||'info'}</span> ${f.title||f.name||f.id} <button class="ghost" onclick="copyReport('${f.id}')">Copy report</button> <button class="ghost" onclick="showEvidence('${f.id}')">Evidence</button><br><span class="sub">${f.target||f.host||''}${f.status?(' · '+f.status):''}</span></div>`).join('') || '<p class="sub">none</p>';
     $('chains').innerHTML = (ch||[]).slice(-12).reverse().map(c=>
       `<div class="item"><span class="tag">${c.severity||'?'}</span> <b>${c.title||c.id}</b><br><span class="sub">${(c.steps||[]).length} steps${c.rationale?(' · '+c.rationale):''}</span></div>`).join('') || '<p class="sub">none</p>';
   } catch(_){}
