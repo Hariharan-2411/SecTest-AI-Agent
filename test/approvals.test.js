@@ -52,6 +52,34 @@ test('timeout auto-denies (fail-safe)', async () => {
   assert.equal(store.get(id).status, 'timeout');
 });
 
+test('denyAll settles every pending request as deny (kill-switch brake)', async () => {
+  const store = memStore();
+  const b = createApprovalBroker({ store });
+  const p1 = b.request({ tool: 'sqlmap', target: 'a.example.com' });
+  const p2 = b.request({ tool: 'dalfox', target: 'b.example.com' });
+  assert.equal(b.pendingIds().length, 2);
+  const n = b.denyAll('killswitch');
+  assert.equal(n, 2);
+  assert.equal(await p1, false);
+  assert.equal(await p2, false);
+  assert.equal(b.pendingIds().length, 0);
+  for (const r of store.all()) assert.equal(r.status, 'deny');
+});
+
+test('records request and decision to the audit log when one is injected', async () => {
+  const store = memStore();
+  const events = [];
+  const audit = { record: (type, detail, actor) => events.push({ type, detail, actor }) };
+  const b = createApprovalBroker({ store, audit });
+  const p = b.request({ tool: 'sqlmap', target: 'app.example.com', risk: 'destructive' });
+  const [id] = b.pendingIds();
+  b.approve(id, 'tester');
+  await p;
+  assert.deepEqual(events.map((e) => e.type), ['approval.requested', 'approval.approve']);
+  assert.equal(events[0].detail.risk, 'destructive');
+  assert.equal(events[1].actor, 'tester');
+});
+
 test('settling an unknown/already-settled id is a no-op', async () => {
   const store = memStore();
   const b = createApprovalBroker({ store });

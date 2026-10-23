@@ -21,6 +21,12 @@
   .item{border-top:1px solid var(--line);padding:10px 0} .item:first-child{border-top:none}
   .tag{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--line);color:var(--muted)}
   .pending{color:var(--warn);font-weight:600} code{background:var(--line);padding:1px 5px;border-radius:4px}
+  .ks{display:flex;gap:10px;align-items:center;justify-content:space-between;border-radius:12px;padding:12px 16px;border:1px solid var(--line)}
+  .ks.halted{background:rgba(214,69,69,.12);border-color:var(--deny)}
+  .ks.live{background:rgba(31,157,85,.10);border-color:var(--ok)}
+  .ks b{font-size:14px} .ks button{margin:0}
+  .audit{font-size:12px;color:var(--muted);max-height:220px;overflow:auto}
+  .audit .item{padding:4px 0;font-family:ui-monospace,monospace}
 </style>
 </head>
 <body>
@@ -30,6 +36,11 @@
     <p class="sub">Scope-gated recon · safe auto-runs · active/destructive steps ask you first · nothing auto-submits</p>
     <label>Dashboard token</label>
     <input id="token" placeholder="x-dashboard-token" />
+  </div>
+
+  <div id="ks" class="ks live">
+    <span><b id="ksLabel">● Live</b> <span class="sub" id="ksReason"></span></span>
+    <button id="ksBtn" class="deny" onclick="toggleKill()">Engage kill-switch</button>
   </div>
 
   <div class="card">
@@ -44,7 +55,12 @@
     <div class="row"><input type="checkbox" id="confirm" /><label style="margin:0">I confirm this policy (required to enable active tools)</label></div>
     <div class="row"><input type="checkbox" id="destructive" /><label style="margin:0">Also allow destructive tools (explicit opt-in)</label></div>
     <div class="row"><input type="checkbox" id="fullev" /><label style="margin:0">Full evidence (capture request/response via proxy) — else Light (command + output)</label></div>
-    <button onclick="startRun()">Start</button>
+    <label>Monitor interval (minutes) — re-run on a schedule, alert only on NEW findings</label>
+    <input id="interval" type="number" min="1" placeholder="360" />
+    <div class="row">
+      <button onclick="startRun()">Start once</button>
+      <button class="ghost" onclick="startRun(true)">Start + monitor</button>
+    </div>
     <pre id="startOut" class="sub"></pre>
   </div>
 
@@ -52,13 +68,15 @@
   <div class="card"><h3>Runs</h3><div id="runs"></div></div>
   <div class="card"><h3>Findings</h3><div id="findings"></div></div>
   <div class="card"><h3>Chain hypotheses <span class="tag">verify before reporting</span></h3><div id="chains"></div></div>
+  <div class="card"><h3>Active monitors</h3><div id="monitors"></div></div>
+  <div class="card"><h3>Audit log <span class="tag">append-only</span></h3><div id="audit" class="audit"></div></div>
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
 const tok = () => $('token').value.trim();
 const H = () => ({ 'Content-Type': 'application/json', 'x-dashboard-token': tok() });
-async function startRun(){
-  const body = {
+function engagementBody(){
+  return {
     name: 'engagement-' + Date.now(),
     urls: $('urls').value.split('\n').map(s=>s.trim()).filter(Boolean),
     outOfScopeUrls: $('oos').value.split('\n').map(s=>s.trim()).filter(Boolean),
@@ -68,11 +86,24 @@ async function startRun(){
     allowDestructive: $('destructive').checked,
     evidenceMode: $('fullev').checked ? 'full' : 'light',
   };
-  const r = await fetch('/api/engagements', { method:'POST', headers:H(), body:JSON.stringify(body) });
+}
+async function startRun(monitor){
+  const body = engagementBody();
+  let url = '/api/engagements';
+  if (monitor) { url = '/api/monitors'; body.intervalMs = Math.max(Number($('interval').value||360),1) * 60000; }
+  const r = await fetch(url, { method:'POST', headers:H(), body:JSON.stringify(body) });
   const j = await r.json();
   $('startOut').textContent = JSON.stringify(j.engagement ? { scope:j.engagement.scope, policy:j.engagement.policy, warnings:j.engagement.warnings } : j, null, 2);
   refresh();
 }
+async function toggleKill(){
+  const engaged = $('ks').classList.contains('halted');
+  const action = engaged ? 'clear' : 'engage';
+  const reason = engaged ? '' : (prompt('Reason for halting all runs?') || 'manual');
+  await fetch('/api/killswitch', { method:'POST', headers:H(), body:JSON.stringify({ action, reason }) });
+  refresh();
+}
+async function stopMonitor(id){ await fetch('/api/monitors/'+encodeURIComponent(id)+'/stop', { method:'POST', headers:H() }); refresh(); }
 async function decide(id, d){ await fetch(`/api/approvals/${id}/${d}`, { method:'POST', headers:H() }); refresh(); }
 async function showEvidence(id){
   try{ const r=await fetch('/api/findings/'+encodeURIComponent(id)+'/evidence',{headers:H()}); const j=await r.json();
@@ -85,12 +116,26 @@ async function copyReport(id){
 }
 async function refresh(){
   try {
-    const [ap, ru, fi, ch] = await Promise.all([
+    const [ap, ru, fi, ch, ks, mo, au] = await Promise.all([
       fetch('/api/approvals',{headers:H()}).then(r=>r.json()),
       fetch('/api/runs',{headers:H()}).then(r=>r.json()),
       fetch('/api/findings',{headers:H()}).then(r=>r.json()),
       fetch('/api/chains',{headers:H()}).then(r=>r.json()),
+      fetch('/api/killswitch',{headers:H()}).then(r=>r.json()),
+      fetch('/api/monitors',{headers:H()}).then(r=>r.json()),
+      fetch('/api/audit?tail=25',{headers:H()}).then(r=>r.json()),
     ]);
+    const halted = !!(ks && ks.engaged);
+    $('ks').className = 'ks ' + (halted ? 'halted' : 'live');
+    $('ksLabel').textContent = halted ? '■ HALTED' : '● Live';
+    $('ksReason').textContent = halted ? (ks.reason ? ('— ' + ks.reason) : '— all runs stopped') : '';
+    $('ksBtn').textContent = halted ? 'Clear kill-switch' : 'Engage kill-switch';
+    $('ksBtn').className = halted ? 'ok' : 'deny';
+    $('monitors').innerHTML = (mo||[]).map(m=>
+      `<div class="item"><b>${m.name||m.id}</b> <span class="tag">every ${Math.round((m.intervalMs||0)/60000)}m</span> · ${m.runs||0} runs${m.lastRunId?(' · last '+m.lastRunId):''}
+       <button class="deny" onclick="stopMonitor('${m.id}')">Stop</button></div>`).join('') || '<p class="sub">none</p>';
+    $('audit').innerHTML = (au||[]).slice().reverse().map(e=>
+      `<div class="item">${new Date(e.ts).toLocaleTimeString()} <b>${e.type}</b> <span class="sub">${e.actor}</span> ${e.detail?JSON.stringify(e.detail):''}</div>`).join('') || '<p class="sub">none</p>';
     $('approvals').innerHTML = (ap||[]).filter(a=>a.status==='pending').map(a=>
       `<div class="item"><span class="pending">PENDING</span> <code>${a.call?.tool}</code> → ${a.call?.target} <span class="tag">${a.risk}</span><br>
        <button class="ok" onclick="decide('${a.id}','approve')">Approve</button>
