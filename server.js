@@ -25,6 +25,7 @@ const approvalsStore = collection('approvals');
 const runsStore = collection('runs');
 const findingsStore = collection('findings');
 const chainsStore = collection('chains');
+const fingerprintsStore = collection('fingerprints');
 
 const broker = createApprovalBroker({
   store: approvalsStore,
@@ -34,7 +35,7 @@ const broker = createApprovalBroker({
 const llm = createLlm(env);
 const critic = createCritic(env);
 const bot = createBot({ env, broker });
-const runner = createRunner({ env, broker, llm, critic, bot, runs: runsStore, findingsStore, chainsStore });
+const runner = createRunner({ env, broker, llm, critic, bot, runs: runsStore, findingsStore, chainsStore, fingerprintsStore });
 
 function json(res, code, body) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
