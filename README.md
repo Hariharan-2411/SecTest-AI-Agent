@@ -95,8 +95,11 @@ Set in `.env`:
 ## Remote approval
 
 Set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` for two-way Approve/Deny from your phone
-(long-polling — no public URL needed). `DISCORD_WEBHOOK_URL` gets one-way finding alerts.
-The dashboard also lists pending approvals with Approve/Deny buttons.
+(long-polling — no public URL needed). `DISCORD_WEBHOOK_URL` and `SLACK_WEBHOOK_URL` get
+one-way alerts (new findings + an approval heads-up; decide those from the dashboard).
+The dashboard also lists pending approvals with Approve/Deny buttons, and **updates live**
+over Server-Sent Events (`GET /api/events`) — a header shows `● live` — falling back to a
+slow poll if the stream drops.
 
 ## Scope & policy (fail closed)
 
@@ -147,7 +150,8 @@ WebGoat) to exercise the full flow against authorized targets.
 - `lib/approvals.js` — approval broker (suspend-until-human, timeout = deny)
 - `lib/intake.js` — URLs + rules → fail-closed scope + policy
 - `lib/run.js` — wires the bundled brain's `runReconLoop`
-- `lib/bot.js` — Telegram long-poll + Discord webhook
+- `lib/bot.js` — Telegram long-poll + Discord/Slack webhooks
+- `lib/events.js` — in-process event bus → live dashboard (SSE `GET /api/events`)
 - `lib/monitor.js` — scheduled recurring runs (new-only alerts, durable, kill-switch-aware)
 - `lib/killswitch.js` — durable fail-safe emergency halt
 - `lib/audit.js` — append-only action/decision log
