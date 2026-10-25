@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toRiskPolicy, createRunner } from '../lib/run.js';
+import { toRiskPolicy, createRunner, suppressFromAlerts } from '../lib/run.js';
 
 function memStore() {
   const rows = new Map();
@@ -19,6 +19,19 @@ test('active-allowed gates active for a human, destructive stays denied', () => 
 });
 test('destructive opt-in gates destructive for a human too', () => {
   assert.deepEqual(toRiskPolicy({ allowActive: true, allowDestructive: true }), { safe: 'allow', active: 'needs_approval', destructive: 'needs_approval' });
+});
+
+test('FP filter suppresses weak false positives but never a strong/confirmed finding', () => {
+  const fp = { verdict: 'false_positive', reason: 'thin' };
+  // weak + flagged → suppressed
+  assert.equal(suppressFromAlerts({ severity: 'low', confidence: 30 }, fp), true);
+  // confirmed SQLi (high sev, conf 75) flagged FP → MUST NOT be suppressed (the live-run bug)
+  assert.equal(suppressFromAlerts({ severity: 'high', confidence: 75 }, fp), false);
+  assert.equal(suppressFromAlerts({ severity: 'critical' }, fp), false);
+  assert.equal(suppressFromAlerts({ confidence: 70 }, fp), false);
+  // not flagged FP → never suppressed regardless of strength
+  assert.equal(suppressFromAlerts({ severity: 'low' }, { verdict: 'likely' }), false);
+  assert.equal(suppressFromAlerts({ severity: 'low' }, null), false);
 });
 
 test('an engaged kill-switch halts the run before any scan dispatch', async () => {
