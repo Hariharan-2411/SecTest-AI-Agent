@@ -21,6 +21,12 @@ stubbed because the orchestrator injects its own LLM `chat`). Point `IRIS_SRC` a
 extension repo (default `../Extension/chrome-boiler`). Re-run `npm run bundle` to pick up
 extension changes.
 
+**Standalone:** the built `vendor/brain.mjs` is **committed to this repo**, so a fresh
+clone runs with no access to the extension — `npm run bundle` detects the missing source
+and keeps the committed brain instead of failing. The extension stays the single source of
+truth: to ship a brain update you edit it there, re-run `npm run bundle` here (which
+rebuilds from `IRIS_SRC`), and commit the refreshed `vendor/brain.mjs`.
+
 ## Architecture
 
 ```

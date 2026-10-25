@@ -4,7 +4,7 @@
 // resolves the graph and the aiProvider stub keeps browser/Supabase coupling out
 // (the orchestrator always injects its own `chat`).
 import { build } from 'esbuild';
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,19 @@ import { utilsDir, orchRoot } from '../lib/paths.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const utils = utilsDir();
+const outFile = resolve(orchRoot, 'vendor/brain.mjs');
+
+// Standalone mode: if the chrome-boiler brain source isn't next door (e.g. a
+// fresh clone on a server), fall back to the committed vendor/brain.mjs instead
+// of failing. Only rebuild when the source is actually present.
+if (!existsSync(utils)) {
+  if (existsSync(outFile)) {
+    console.log(`ℹ brain source not found at ${utils}\n  → using the committed vendor/brain.mjs (standalone mode; set IRIS_SRC to rebuild).`);
+    process.exit(0);
+  }
+  console.error(`✗ brain source not found at ${utils} and no committed vendor/brain.mjs to fall back on.\n  Set IRIS_SRC to the chrome-boiler folder, or ship a committed vendor/brain.mjs.`);
+  process.exit(1);
+}
 
 // Materialize the entry with the real utils path.
 const entrySrc = readFileSync(join(here, 'brain-entry.mjs'), 'utf8').replaceAll(
@@ -51,7 +64,7 @@ const stubAiProvider = {
 
 await build({
   entryPoints: [entryPath],
-  outfile: resolve(orchRoot, 'vendor/brain.mjs'),
+  outfile: outFile,
   bundle: true,
   format: 'esm',
   platform: 'node',
