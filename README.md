@@ -130,6 +130,19 @@ The dashboard also lists pending approvals with Approve/Deny buttons, and **upda
 over Server-Sent Events (`GET /api/events`) — a header shows `● live` — falling back to a
 slow poll if the stream drops.
 
+## Passive / recon-only mode
+
+Tick **"Passive / recon-only"** at intake (or `POST /api/engagements {"passive":true,...}`) to run
+**OSINT only** — `subfinder`, `assetfinder` (subdomains) + `gau`, `waybackurls` (historical URLs).
+These query third-party sources (passive DNS, cert logs, Wayback, CommonCrawl) and send **no
+traffic to the target**, so it's the one mode safe to point at a program whose rules forbid
+automated scanning: it reads public data to build a map you then test **by hand**. It bypasses
+the LLM loop and never runs any target-contacting tool by construction. Results (deduped
+subdomains + URLs) show on the dashboard's **Passive recon map** and at `GET /api/recon`.
+
+> Even passive recon: only enumerate assets you're authorized to research, and do your actual
+> testing within each program's rules.
+
 ## Scope import
 
 `POST /api/scope/import {"text":"…"}` parses a program's scope into the arrays intake

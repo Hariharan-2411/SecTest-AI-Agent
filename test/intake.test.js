@@ -18,6 +18,14 @@ test('fail-closed: unconfirmed → safe only', () => {
   assert.equal(e.policy.maxRisk, 'safe');
 });
 
+test('passive flag → mode "passive" (default is "full")', () => {
+  const p = buildEngagement({ urls: ['https://a.example.com'], passive: true }, helpers);
+  assert.equal(p.mode, 'passive');
+  assert.ok(p.warnings.some((w) => /passive/i.test(w)));
+  const f = buildEngagement({ urls: ['https://a.example.com'] }, helpers);
+  assert.equal(f.mode, 'full');
+});
+
 test('fail-closed: confirmed but rules forbid automation → safe only', () => {
   const e = buildEngagement({ urls: ['https://a.example.com'], rulesText: 'No automated scanning. Manual only.', confirmed: true }, helpers);
   assert.equal(e.policy.allowActive, false);

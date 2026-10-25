@@ -63,6 +63,7 @@
     <div class="row"><input type="checkbox" id="confirm" /><label style="margin:0">I confirm this policy (required to enable active tools)</label></div>
     <div class="row"><input type="checkbox" id="destructive" /><label style="margin:0">Also allow destructive tools (explicit opt-in)</label></div>
     <div class="row"><input type="checkbox" id="fullev" /><label style="margin:0">Full evidence (capture request/response via proxy) — else Light (command + output)</label></div>
+    <div class="row"><input type="checkbox" id="passive" /><label style="margin:0"><b>Passive / recon-only</b> — OSINT sources only, <b>no traffic to the target</b> (safe for programs that forbid scanning)</label></div>
     <label>Monitor interval (minutes) — re-run on a schedule, alert only on NEW findings</label>
     <input id="interval" type="number" min="1" placeholder="360" />
     <div class="row">
@@ -76,6 +77,7 @@
   <div class="card"><h3>Runs</h3><div id="runs"></div></div>
   <div class="card"><h3>Findings</h3><div id="findings"></div></div>
   <div class="card"><h3>Chain hypotheses <span class="tag">verify before reporting</span></h3><div id="chains"></div></div>
+  <div class="card"><h3>Passive recon map <span class="tag">OSINT · no target contact</span></h3><div id="recon"></div></div>
   <div class="card"><h3>Active monitors</h3><div id="monitors"></div></div>
   <div class="card"><h3>Audit log <span class="tag">append-only</span></h3><div id="audit" class="audit"></div></div>
 </div>
@@ -93,6 +95,7 @@ function engagementBody(){
     confirmed: $('confirm').checked,
     allowDestructive: $('destructive').checked,
     evidenceMode: $('fullev').checked ? 'full' : 'light',
+    passive: $('passive').checked,
   };
 }
 async function startRun(monitor){
@@ -148,6 +151,15 @@ async function refresh(){
       fetch('/api/monitors',{headers:H()}).then(r=>r.json()),
       fetch('/api/audit?tail=25',{headers:H()}).then(r=>r.json()),
     ]);
+    try {
+      const rc = await fetch('/api/recon',{headers:H()}).then(r=>r.json());
+      const latest = (rc||[]).slice(-1)[0];
+      $('recon').innerHTML = latest
+        ? `<div class="item"><b>${latest.name||latest.runId}</b> — ${(latest.subdomains||[]).length} subdomains · ${(latest.urls||[]).length} URLs
+           <details><summary class="sub">subdomains</summary><pre class="sub">${(latest.subdomains||[]).join('\n')||'(none)'}</pre></details>
+           <details><summary class="sub">URLs</summary><pre class="sub">${(latest.urls||[]).slice(0,500).join('\n')||'(none)'}</pre></details></div>`
+        : '<p class="sub">none — run an engagement with "Passive / recon-only" ticked</p>';
+    } catch(_){}
     const halted = !!(ks && ks.engaged);
     $('ks').className = 'ks ' + (halted ? 'halted' : 'live');
     $('ksLabel').textContent = halted ? '■ HALTED' : '● Live';

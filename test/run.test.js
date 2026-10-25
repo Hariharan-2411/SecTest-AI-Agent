@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toRiskPolicy, createRunner, suppressFromAlerts, evidenceForFinding } from '../lib/run.js';
+import { toRiskPolicy, createRunner, suppressFromAlerts, evidenceForFinding, PASSIVE_TOOLS, aggregatePassive } from '../lib/run.js';
 
 function memStore() {
   const rows = new Map();
@@ -63,6 +63,42 @@ test('FP filter suppresses weak false positives but never a strong/confirmed fin
   // not flagged FP → never suppressed regardless of strength
   assert.equal(suppressFromAlerts({ severity: 'low' }, { verdict: 'likely' }), false);
   assert.equal(suppressFromAlerts({ severity: 'low' }, null), false);
+});
+
+test('PASSIVE_TOOLS are OSINT-only — no tool that contacts the target', () => {
+  const targetContacting = ['httpx', 'dnsx', 'naabu', 'nmap', 'nuclei', 'katana', 'ffuf', 'feroxbuster', 'dalfox', 'sqlmap', 'crlfuzz', 'sstimap', 'commix', 'wpscan', 'gowitness'];
+  for (const t of PASSIVE_TOOLS) assert.ok(!targetContacting.includes(t), `${t} contacts the target — not passive`);
+  assert.deepEqual(PASSIVE_TOOLS, ['subfinder', 'assetfinder', 'gau', 'waybackurls']);
+});
+
+test('aggregatePassive dedupes subdomains + urls and ignores failed/other results', () => {
+  const out = aggregatePassive([
+    { ok: true, kind: 'subdomains', items: ['a.example.com', 'b.example.com'] },
+    { ok: true, kind: 'subdomains', items: ['a.example.com'] },           // dup
+    { ok: true, kind: 'urls', items: ['https://a.example.com/x?q=1'] },
+    { ok: false, kind: 'urls', items: ['https://nope.example.com'] },     // failed → ignored
+    { ok: true, kind: 'findings', items: [{ x: 1 }] },                    // non-recon kind → ignored
+  ]);
+  assert.deepEqual(out.subdomains, ['a.example.com', 'b.example.com']);
+  assert.deepEqual(out.urls, ['https://a.example.com/x?q=1']);
+});
+
+test('a passive run only dispatches PASSIVE_TOOLS (never touches the target with active tools)', async () => {
+  const dispatched = [];
+  // Intercept the agent client by stubbing the brain import is hard; instead assert via a fake runner path:
+  const runs = memStore();
+  const recon = memStore();
+  const runner = createRunner({
+    env: { AGENT_URL: 'http://agent.invalid', AGENT_TOKEN: 't' },
+    runs, reconStore: recon,
+    audit: { record: (type, detail) => { if (type === 'scan.dispatched') dispatched.push(detail.tool); } },
+  });
+  // agent.invalid is unreachable → scans throw and are swallowed, but dispatch audit still fires first.
+  const r = await runner.runPassiveRecon({ name: 'p', scope: { inScope: ['example.com'], outOfScope: [] } });
+  assert.equal(typeof r.id, 'string');
+  // every dispatched tool must be in the passive allowlist
+  for (const t of dispatched) assert.ok(PASSIVE_TOOLS.includes(t), `dispatched non-passive tool: ${t}`);
+  assert.ok(dispatched.length > 0);
 });
 
 test('an engaged kill-switch halts the run before any scan dispatch', async () => {

@@ -35,6 +35,7 @@ const fingerprintsStore = collection('fingerprints');
 const evidenceStore = collection('evidence');
 const auditStore = collection('audit');
 const killswitchStore = collection('killswitch');
+const reconStore = collection('recon');
 
 const bus = createEventBus();
 const audit = createAuditLog({ store: auditStore, emit: (rec) => bus.emit({ kind: 'audit', ...rec }) });
@@ -49,7 +50,7 @@ const llm = createLlm(env);
 const critic = createCritic(env);
 const bot = createBot({ env, broker });
 const memory = createMemory({ store: collection('memory') });
-const runner = createRunner({ env, broker, llm, critic, bot, audit, killswitch, memory, runs: runsStore, findingsStore, chainsStore, fingerprintsStore, evidenceStore });
+const runner = createRunner({ env, broker, llm, critic, bot, audit, killswitch, memory, runs: runsStore, findingsStore, chainsStore, fingerprintsStore, evidenceStore, reconStore });
 const monitorsStore = collection('monitors');
 const monitor = createMonitor({ runner, store: monitorsStore, audit, killswitch, bot });
 
@@ -113,9 +114,11 @@ const server = http.createServer(async (req, res) => {
       try {
         engagement = buildEngagement(body, { hostFromUrl: brain.hostFromUrl, parseScopeText: brain.parseScopeText });
       } catch (e) { return json(res, 400, { error: String(e) }); }
-      audit.record('engagement.created', { name: engagement.name, scope: engagement.scope, evidenceMode: engagement.evidenceMode }, 'intake');
-      // Kick the run; don't block the HTTP response on the whole loop.
-      runner.runEngagement(engagement).catch(() => {});
+      audit.record('engagement.created', { name: engagement.name, scope: engagement.scope, evidenceMode: engagement.evidenceMode, mode: engagement.mode }, 'intake');
+      // Kick the run; don't block the HTTP response on the whole loop. Passive
+      // engagements take the OSINT-only path (no target contact, no LLM loop).
+      if (engagement.mode === 'passive') runner.runPassiveRecon(engagement).catch(() => {});
+      else runner.runEngagement(engagement).catch(() => {});
       return json(res, 202, { accepted: true, engagement });
     }
     if (path === '/api/audit' && req.method === 'GET') {
@@ -149,6 +152,7 @@ const server = http.createServer(async (req, res) => {
       const ok = m[2] === 'approve' ? broker.approve(m[1], 'dashboard') : broker.deny(m[1], 'dashboard');
       return json(res, ok ? 200 : 409, { ok });
     }
+    if (path === '/api/recon' && req.method === 'GET') return json(res, 200, reconStore.all());
     if (path === '/api/runs' && req.method === 'GET') return json(res, 200, runsStore.all());
     if (path === '/api/findings' && req.method === 'GET') return json(res, 200, findingsStore.all());
     if (path === '/api/chains' && req.method === 'GET') return json(res, 200, chainsStore.all());
