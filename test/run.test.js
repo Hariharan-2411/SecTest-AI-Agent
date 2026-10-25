@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toRiskPolicy, createRunner, suppressFromAlerts } from '../lib/run.js';
+import { toRiskPolicy, createRunner, suppressFromAlerts, evidenceForFinding } from '../lib/run.js';
 
 function memStore() {
   const rows = new Map();
@@ -19,6 +19,37 @@ test('active-allowed gates active for a human, destructive stays denied', () => 
 });
 test('destructive opt-in gates destructive for a human too', () => {
   assert.deepEqual(toRiskPolicy({ allowActive: true, allowDestructive: true }), { safe: 'allow', active: 'needs_approval', destructive: 'needs_approval' });
+});
+
+test('evidenceForFinding pulls the salient tool proof (not the banner) for the validator', () => {
+  const finding = { host: 'juiceshop', type: 'nuclei', matched: 'params: q (GET)' };
+  const sqlmapRaw = [
+    '       ___ sqlmap banner legal disclaimer blah blah',
+    '[INFO] testing connection to the target URL',
+    "GET parameter 'q' is vulnerable",
+    'Parameter: q (GET)',
+    '    Type: boolean-based blind',
+    "    Payload: q=test%' AND 9992=9992",
+    'back-end DBMS: SQLite',
+  ].join('\n');
+  const executed = [
+    { ran: true, found: 0, call: { tool: 'httpx', target: 'http://juiceshop:3000' }, rawExcerpt: '200 OK Juice Shop' },
+    { ran: true, found: 1, call: { tool: 'sqlmap', target: 'http://juiceshop:3000/rest/products/search?q=test' }, rawExcerpt: sqlmapRaw },
+  ];
+  const ev = evidenceForFinding(finding, executed);
+  assert.match(ev, /vulnerable/i);            // the proof, not "params: q (GET)"
+  assert.match(ev, /boolean-based blind/i);
+  assert.match(ev, /SQLite/);
+  assert.ok(ev.length <= 400 + 120);          // concise enough to survive the validator's clip
+  assert.ok(!/legal disclaimer/i.test(ev));   // banner noise dropped
+});
+
+test('evidenceForFinding falls back to the finding own evidence when no tool output matches', () => {
+  const ev = evidenceForFinding({ host: 'a.example.com', matched: 'reflected <svg>' }, [
+    { ran: true, found: 1, call: { tool: 'sqlmap', target: 'http://other.test/x?y=1' }, rawExcerpt: 'vulnerable elsewhere' },
+  ]);
+  assert.match(ev, /reflected/);
+  assert.ok(!/elsewhere/.test(ev)); // different host → not borrowed
 });
 
 test('FP filter suppresses weak false positives but never a strong/confirmed finding', () => {
