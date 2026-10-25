@@ -339,6 +339,8 @@ var ACTION_VERBS = {
   agent_scan: { risk: "active", targetKind: "host" },
   manual: { risk: "none", targetKind: "none" }
 };
+var MAX_DEPTH = 2;
+var DEFAULT_ESCALATION_BUDGET = 25;
 
 // ../Extension/chrome-boiler/src/utils/validate.js
 var BANDS = { confirmed: 80, likely: 55, tentative: 30, noise: 0 };
@@ -1564,6 +1566,18 @@ function formatReconDigest(digest) {
   return lines.join("\n");
 }
 
+// ../Extension/chrome-boiler/src/utils/escalationBudget.js
+var BAND_PLAN = {
+  confirmed: { maxDepth: MAX_DEPTH + 1, budget: Math.round(DEFAULT_ESCALATION_BUDGET * 1.2) },
+  likely: { maxDepth: MAX_DEPTH, budget: DEFAULT_ESCALATION_BUDGET },
+  tentative: { maxDepth: Math.max(1, MAX_DEPTH - 1), budget: Math.round(DEFAULT_ESCALATION_BUDGET * 0.4) },
+  noise: { maxDepth: 0, budget: 0 }
+};
+function escalationBudgetFor(finding) {
+  const { band } = scoreFinding(finding && typeof finding === "object" ? finding : {});
+  return BAND_PLAN[band] || BAND_PLAN.likely;
+}
+
 // ../Extension/chrome-boiler/src/utils/reportBuilder.js
 var REPORT_PLATFORMS = [
   { id: "hackerone", label: "HackerOne" },
@@ -1684,12 +1698,14 @@ function buildReport(finding = {}, platform = "hackerone") {
   ].filter((s) => s !== "").join("\n");
 }
 export {
+  BAND_PLAN,
   EMPTY_SCOPE,
   REPORT_PLATFORMS,
   buildPocScaffold,
   buildReconDigest,
   buildReport,
   draftChainNarrative,
+  escalationBudgetFor,
   evaluateScope,
   executeReconTool,
   finalizeTriage,

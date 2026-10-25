@@ -89,6 +89,33 @@ test('a cycle is skipped (engagement never runs) while the kill-switch is engage
   assert.ok(events.includes('monitor.skipped'));
 });
 
+test('next cycle budget is scaled by the strongest finding band (adaptive effort)', async () => {
+  const store = memStore();
+  const calls = [];
+  const runner = {
+    runEngagement: async (eng, opts) => { calls.push(opts || {}); return { id: `r${calls.length}`, ranked: [{ id: 'x', status: 'new' }] }; },
+  };
+  // Stub the band→effort mapper: pretend the finding is 'confirmed' (budget 30) vs likely baseline 25 → factor 1.2.
+  const effortFor = () => ({ maxDepth: 3, budget: 30 });
+  const m = createMonitor({ runner, store, effortFor, baselineBudget: 25, setTimer: () => 1, clearTimer: () => {} });
+  const mon = m.schedule({ name: 'n' }, 1000);
+  await m.runCycle(mon.id); // cycle 1: no prior findings → default factor 1
+  await m.runCycle(mon.id); // cycle 2: uses the factor computed from cycle 1's findings
+  assert.equal(calls[0].budgetFactor, 1);
+  assert.equal(calls[1].budgetFactor, 1.2);
+  assert.equal(store.get(mon.id).nextBudgetFactor, 1.2);
+});
+
+test('a weak/uncertain band never shrinks the budget below 1 (boost-only)', async () => {
+  const store = memStore();
+  const runner = { runEngagement: async () => ({ id: 'r', ranked: [{ id: 'x', status: 'new' }] }) };
+  const effortFor = () => ({ maxDepth: 1, budget: 10 }); // tentative (< baseline 25)
+  const m = createMonitor({ runner, store, effortFor, baselineBudget: 25, setTimer: () => 1, clearTimer: () => {} });
+  const mon = m.schedule({ name: 'n' }, 1000);
+  await m.runCycle(mon.id);
+  assert.equal(store.get(mon.id).nextBudgetFactor, 1); // 10/25=0.4 → floored to 1, not reduced
+});
+
 test('stop() clears the timer, marks the monitor stopped, and drops it from list()', () => {
   const store = memStore();
   let cleared = 0;
