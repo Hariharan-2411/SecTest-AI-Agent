@@ -779,18 +779,36 @@ function buildReconPrompt(context = {}) {
     0,
     (context.budget || DEFAULT_RECON_BUDGET) - (context.budgetUsed || 0)
   );
-  const done = (Array.isArray(context.executed) ? context.executed : []).filter((e) => e && e.ran).map((e) => `${e.call && e.call.tool}:${e.call && e.call.target}`).slice(0, 30);
+  const executed = Array.isArray(context.executed) ? context.executed : [];
+  const done = executed.filter((e) => e && e.ran).map((e) => `${e.call && e.call.tool}:${e.call && e.call.target}`).slice(0, 30);
+  const findingDigest = (Array.isArray(context.findings) ? context.findings : []).slice(-10).map((f) => {
+    const what = f.type || f.name || f.title || "finding";
+    const where = f.host || f.target || "";
+    const conf = f.confidence != null ? `(${f.confidence})` : "";
+    return `${what}@${where}${conf}`;
+  });
+  const toolErrors = executed.filter((e) => e && e.ran && (e.error || e.ok === false)).slice(-6).map((e) => `${e.call && e.call.tool}:${e.call && e.call.target} \u2192 ${String(e.error || "failed").replace(/\s+/g, " ").slice(0, 80)}`);
   const content = `You are a bug-bounty recon planner. Goal: enumerate in-scope assets and surface known vulnerabilities using ONLY the allowed tools, staying strictly in scope. Allowed tools: ${Object.keys(RECON_TOOLS).join(
     ", "
-  )}. Profiles: ${RECON_PROFILES.join(", ")}. In-scope targets: ${targets.join(", ") || "(none)"}. Known endpoints (use these EXACT URLs as the target when scanning, keeping their scheme and port): ${seedUrls.join(", ") || "(none)"}. Already run: ${done.join(", ") || "(none)"}. Discovered so far: ${(s.subdomains || []).length} subdomains, ${(s.hosts || []).length} hosts, ${(s.urls || []).length} urls, ${(s.ports || []).length} ports; ${(context.findings || []).length} findings. Budget remaining: ${remaining} tool runs. STRATEGY: discovery is only the first step \u2014 do NOT spend the whole budget enumerating. As soon as you have endpoints (the Known endpoints above, or once katana/gau/httpx have run), spend most of the remaining budget TESTING those exact endpoint URLs for vulnerabilities with the vuln/injection tools: nuclei, dalfox (XSS), sqlmap (SQLi), crlfuzz (CRLF), sstimap (SSTI), commix (command injection), jwt_tool, subzy (takeover), s3scanner, wpscan. Target the discovered endpoint URLs, not just the root. Propose the next 1-3 recon steps as JSON only: {"steps":[{"tool","target","profile"}],"done":false}. Reference only in-scope targets and allowed tools. Set done:true only when both discovery AND vuln testing of the endpoints are done. JSON only:`;
+  )}. Profiles: ${RECON_PROFILES.join(", ")}. In-scope targets: ${targets.join(", ") || "(none)"}. Known endpoints (use these EXACT URLs as the target when scanning, keeping their scheme and port): ${seedUrls.join(", ") || "(none)"}. Already run: ${done.join(", ") || "(none)"}. Discovered so far: ${(s.subdomains || []).length} subdomains, ${(s.hosts || []).length} hosts, ${(s.urls || []).length} urls, ${(s.ports || []).length} ports; ${(context.findings || []).length} findings. Budget remaining: ${remaining} tool runs. Findings so far: ${findingDigest.join("; ") || "(none yet)"}. ` + (toolErrors.length ? `Recent tool failures (do NOT blindly re-run these on the same target): ${toolErrors.join("; ")}. ` : "") + 'REACT TO THE EVIDENCE ABOVE: let the specific findings drive the next steps \u2014 e.g. a login/auth endpoint \u2192 auth/JWT tests; a parametered URL \u2192 injection tools; a detected CMS/tech \u2192 its dedicated tool; a tool that failed \u2192 try a different tool or target, not the same one again. STRATEGY: discovery is only the first step \u2014 do NOT spend the whole budget enumerating. As soon as you have endpoints (the Known endpoints above, or once katana/gau/httpx have run), spend most of the remaining budget TESTING those exact endpoint URLs for vulnerabilities with the vuln/injection tools: nuclei, dalfox (XSS), sqlmap (SQLi), crlfuzz (CRLF), sstimap (SSTI), commix (command injection), jwt_tool, subzy (takeover), s3scanner, wpscan. Target the discovered endpoint URLs, not just the root. Propose the next 1-3 recon steps as JSON only: {"steps":[{"tool","target","profile"}],"done":false}. Reference only in-scope targets and allowed tools. Set done:true only when both discovery AND vuln testing of the endpoints are done. JSON only:';
   return { messages: [{ role: "user", content }] };
 }
 async function planReconStep(context, { chat: chat2, model } = {}) {
   const call = chat2 || chat;
   try {
     const { messages } = buildReconPrompt(context);
-    const reply = await call(messages, model);
-    const parsed = safeParse(reply);
+    let reply = await call(messages, model);
+    let parsed = safeParse(reply);
+    if (!parsed) {
+      const repair = messages.concat([
+        {
+          role: "user",
+          content: 'Your previous reply was not valid JSON. Reply with ONLY the JSON object {"steps":[{"tool","target","profile"}],"done":false} \u2014 no prose, no explanation, no code fence.'
+        }
+      ]);
+      reply = await call(repair, model);
+      parsed = safeParse(reply);
+    }
     if (!parsed) return { steps: [], done: true };
     return {
       steps: Array.isArray(parsed.steps) ? parsed.steps : [],
