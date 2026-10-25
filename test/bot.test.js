@@ -31,6 +31,16 @@ test('Slack also gets a one-way notice when an approval is needed', async () => 
   assert.match(slack.body.text, /apr_1/);
 });
 
+test('notifyText fans a plain message out to every configured channel', async () => {
+  const fetchImpl = fakeFetch();
+  const bot = createBot({ env: { TELEGRAM_BOT_TOKEN: 'tg', TELEGRAM_CHAT_ID: '42', SLACK_WEBHOOK_URL: 'https://hooks.slack.test/x' }, fetchImpl });
+  await bot.notifyText('recon digest: 2 new findings');
+  const tg = fetchImpl.calls.find((c) => c.url.includes('telegram'));
+  const slack = fetchImpl.calls.find((c) => c.url.includes('slack.test'));
+  assert.ok(tg && /recon digest/.test(tg.body.text));
+  assert.ok(slack && /recon digest/.test(slack.body.text));
+});
+
 test('with nothing configured, notifiers no-op (no posts, enabled all false)', async () => {
   const fetchImpl = fakeFetch();
   const bot = createBot({ env: {}, fetchImpl });

@@ -49,7 +49,7 @@ const critic = createCritic(env);
 const bot = createBot({ env, broker });
 const runner = createRunner({ env, broker, llm, critic, bot, audit, killswitch, runs: runsStore, findingsStore, chainsStore, fingerprintsStore, evidenceStore });
 const monitorsStore = collection('monitors');
-const monitor = createMonitor({ runner, store: monitorsStore, audit, killswitch });
+const monitor = createMonitor({ runner, store: monitorsStore, audit, killswitch, bot });
 
 function json(res, code, body) {
   res.writeHead(code, { 'Content-Type': 'application/json' });

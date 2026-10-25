@@ -41,6 +41,39 @@ test('a cycle runs the engagement and audits new-vs-seen counts', async () => {
   assert.equal(store.get(mon.id).runs, 1);
 });
 
+test('a cycle builds a recon digest of the new findings and sends it via the bot', async () => {
+  const store = memStore();
+  const ranked = [
+    { id: 'a', status: 'new', host: 'app.example.com', title: 'New JWT' },
+    { id: 'b', status: 'seen', host: 'app.example.com', title: 'Old thing' },
+  ];
+  const runner = { runEngagement: async () => ({ id: 'run_9', ranked }) };
+  const sent = [];
+  const bot = { notifyText: async (t) => sent.push(t) };
+  // Inject the digest fns so the test stays pure (no bundle/signals dependency).
+  const buildDigest = (delta) => ({ empty: delta.newFindings.length === 0, summary: `${delta.newFindings.length} new`, newFindings: delta.newFindings });
+  const formatDigest = (d) => `DIGEST: ${d.summary}`;
+  const m = createMonitor({ runner, store, bot, buildDigest, formatDigest, setTimer: () => 1, clearTimer: () => {} });
+  const mon = m.schedule({ name: 'n', scope: {} }, 1000);
+  await m.runCycle(mon.id);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /DIGEST: 1 new/);           // only the 1 NEW finding counted
+  assert.ok(store.get(mon.id).lastDigest);           // digest persisted on the monitor
+});
+
+test('a cycle with no new findings sends no digest (quiet)', async () => {
+  const store = memStore();
+  const runner = { runEngagement: async () => ({ id: 'run_q', ranked: [{ id: 'b', status: 'seen' }] }) };
+  const sent = [];
+  const bot = { notifyText: async (t) => sent.push(t) };
+  const buildDigest = (delta) => ({ empty: delta.newFindings.length === 0, summary: 'none', newFindings: delta.newFindings });
+  const formatDigest = (d) => `DIGEST: ${d.summary}`;
+  const m = createMonitor({ runner, store, bot, buildDigest, formatDigest, setTimer: () => 1, clearTimer: () => {} });
+  const mon = m.schedule({ name: 'n' }, 1000);
+  await m.runCycle(mon.id);
+  assert.equal(sent.length, 0); // empty digest → stay quiet
+});
+
 test('a cycle is skipped (engagement never runs) while the kill-switch is engaged', async () => {
   const store = memStore();
   const events = [];

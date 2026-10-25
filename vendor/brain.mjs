@@ -343,6 +343,7 @@ var ACTION_VERBS = {
 // ../Extension/chrome-boiler/src/utils/validate.js
 var BANDS = { confirmed: 80, likely: 55, tentative: 30, noise: 0 };
 var DEFAULT_REPORT_THRESHOLD = BANDS.likely;
+var BAND_ORDER = ["confirmed", "likely", "tentative", "noise"];
 var RULES = {
   domXssBase: 30,
   // A runtime canary that reached the sink (domProbe) is strong reachability
@@ -503,6 +504,13 @@ function filterForReport(list, { minConfidence = DEFAULT_REPORT_THRESHOLD } = {}
   return (Array.isArray(list) ? list : []).filter(
     (f) => scoreFinding(f).confidence >= minConfidence
   );
+}
+function canEscalateFinding(finding, { minBand = "likely" } = {}) {
+  const band = scoreFinding(finding).band;
+  const gate = BAND_ORDER.indexOf(minBand);
+  const got = BAND_ORDER.indexOf(band);
+  if (gate === -1 || got === -1) return false;
+  return got <= gate;
 }
 
 // ../Extension/chrome-boiler/src/utils/enrich.js
@@ -1090,12 +1098,12 @@ function matchPlaybooks(findings, { scope } = {}) {
     const m = matchOne(pb, eligibleSorted);
     if (m.satisfied.length >= 1) results.push(m);
   }
-  const sevRank = (s) => {
+  const sevRank2 = (s) => {
     const i = SEVERITY_ORDER.indexOf(s);
     return i === -1 ? SEVERITY_ORDER.length : i;
   };
   results.sort(
-    (a, b) => Number(b.complete) - Number(a.complete) || b.completeness - a.completeness || sevRank(a.severity) - sevRank(b.severity)
+    (a, b) => Number(b.complete) - Number(a.complete) || b.completeness - a.completeness || sevRank2(a.severity) - sevRank2(b.severity)
   );
   return results;
 }
@@ -1405,6 +1413,157 @@ function buildPocScaffold(finding) {
   };
 }
 
+// ../Extension/chrome-boiler/src/utils/chainGoals.js
+var LINK_PROBE_HINTS = {
+  "dom-xss": { verbs: ["confirm_reflection", "run_payload"], note: "drive a marker into the sink; confirm reflection/execution (run_payload family: xss)" },
+  jwt: { verbs: ["deep_js"], note: "deep-scan JS/responses for an exposed credential" },
+  aws_access_key: { verbs: ["deep_js"], note: "deep-scan JS/responses for an exposed credential" },
+  google_api_key: { verbs: ["deep_js"], note: "deep-scan JS/responses for an exposed credential" },
+  github_token: { verbs: ["deep_js"], note: "deep-scan JS/responses for an exposed credential" },
+  slack_token: { verbs: ["deep_js"], note: "deep-scan JS/responses for an exposed credential" },
+  stripe_key: { verbs: ["deep_js"], note: "deep-scan JS/responses for an exposed credential" },
+  private_key: { verbs: ["deep_js"], note: "deep-scan JS/responses for an exposed credential" },
+  "sqli-boolean": { verbs: ["differential_probe"], note: "boolean/timing differential to confirm blind SQLi" },
+  "api-injection": { verbs: ["differential_probe"], note: "differential probe on the candidate parameter" },
+  "api-idor-candidate": { verbs: ["probe_endpoint"], note: "GET-only replay (neighbor id / no-auth) \u2014 human verifies" },
+  "api-auth": { verbs: ["probe_endpoint"], note: "GET-only no-auth replay to test missing authorization" },
+  "graphql-introspection": { verbs: ["probe_endpoint"], note: "probe the GraphQL endpoint for introspection" },
+  "graphql-suggestions": { verbs: ["probe_endpoint"], note: "probe the GraphQL endpoint for field suggestions" },
+  "graphql-surface": { verbs: ["probe_endpoint"], note: "enumerate the GraphQL query/mutation surface" },
+  "api-spec-exposed": { verbs: ["probe_endpoint"], note: "fetch the OpenAPI/Swagger spec" },
+  "permissive-cors": { verbs: ["probe_endpoint"], note: "observe response CORS headers" },
+  "set-cookie": { verbs: ["probe_endpoint"], note: "observe Set-Cookie flags on an authenticated response" },
+  "missing-csp": { verbs: ["manual"], note: "review the CSP header by hand" },
+  "weak-csp": { verbs: ["manual"], note: "review the CSP header by hand" },
+  "ws-cswsh": { verbs: ["manual"], note: "assess cross-site WebSocket hijack by hand" },
+  "ws-injection": { verbs: ["manual"], note: "test WebSocket frame injection by hand" }
+};
+var DEFAULT_HINT = { verbs: ["manual"], note: "assess by hand" };
+function hintForTypes(types) {
+  for (const t of Array.isArray(types) ? types : []) {
+    if (LINK_PROBE_HINTS[t]) return LINK_PROBE_HINTS[t];
+  }
+  return DEFAULT_HINT;
+}
+function deriveChainGoals(finding, { findings, scope, max = 3 } = {}) {
+  if (!finding || typeof finding.type !== "string" || !finding.id) return [];
+  const list = Array.isArray(findings) ? findings : [];
+  const matches = matchPlaybooks(list, { scope });
+  const goals = [];
+  for (const m of matches) {
+    if (!Array.isArray(m.missing) || m.missing.length === 0) continue;
+    const fills = Array.isArray(m.satisfied) && m.satisfied.some((s) => s.findingId === finding.id);
+    if (!fills) continue;
+    goals.push({
+      playbookId: m.playbookId,
+      name: m.name,
+      have: m.satisfied.map((s) => s.type),
+      missing: m.missing.map((x) => ({
+        linkId: x.linkId,
+        label: x.label,
+        types: x.match && x.match.types || [],
+        hint: hintForTypes(x.match && x.match.types)
+      }))
+    });
+    if (goals.length >= max) break;
+  }
+  return goals;
+}
+
+// ../Extension/chrome-boiler/src/utils/signals.js
+var SIGNAL_REASONS = {
+  jwt: { reason: "Exposed credential in a response/JS", rank: 1 },
+  aws_access_key: { reason: "Exposed AWS credential", rank: 1 },
+  google_api_key: { reason: "Exposed Google API key", rank: 1 },
+  github_token: { reason: "Exposed GitHub token", rank: 1 },
+  slack_token: { reason: "Exposed Slack token", rank: 1 },
+  stripe_key: { reason: "Exposed Stripe key", rank: 1 },
+  private_key: { reason: "Exposed private key", rank: 1 },
+  "api-spec-exposed": { reason: "Exposed API spec \u2014 a readable OpenAPI/Swagger doc maps new surface", rank: 2 },
+  "graphql-introspection": { reason: "GraphQL introspection enabled \u2014 full schema exposed", rank: 2 },
+  "api-idor-candidate": { reason: "Access-control candidate \u2014 worth confirming (you verify impact)", rank: 2 },
+  "api-auth": { reason: "Missing-auth candidate \u2014 worth confirming", rank: 2 },
+  "permissive-cors": { reason: "Permissive CORS with credentials", rank: 2 },
+  "graphql-suggestions": { reason: "GraphQL field suggestions leak schema", rank: 3 },
+  "dom-xss": { reason: "DOM-XSS sink candidate \u2014 confirm reachability", rank: 3 }
+};
+var HIGH_SIGNAL_TYPES = new Set(Object.keys(SIGNAL_REASONS));
+function hostInScope3(host, scope) {
+  if (!scope) return true;
+  const h = typeof host === "string" ? host.trim() : "";
+  if (!h) return true;
+  const url = /^https?:\/\//i.test(h) ? h : `https://${h}`;
+  return evaluateScope(url, scope).allowed;
+}
+var sevRank = (s) => {
+  const i = FINDING_SEVERITIES.indexOf(s);
+  return i === -1 ? FINDING_SEVERITIES.length : i;
+};
+function detectEscalationSignals(findings, { scope, minBand = "tentative", max = 5 } = {}) {
+  const list = Array.isArray(findings) ? findings.filter(Boolean) : [];
+  const out = [];
+  for (const f of list) {
+    if (!f || !f.id) continue;
+    if (!canEscalateFinding(f, { minBand })) continue;
+    if (!hostInScope3(f.host, scope)) continue;
+    const chainGoals = deriveChainGoals(f, { findings: list, scope });
+    const isChainLink = chainGoals.length > 0;
+    const signal = SIGNAL_REASONS[f.type];
+    if (!isChainLink && !signal) continue;
+    const reason = isChainLink ? `Advances "${chainGoals[0].name}" \u2014 missing ${chainGoals[0].missing.map((m) => m.label).join(", ")}` : signal.reason;
+    out.push({
+      findingId: f.id,
+      type: f.type,
+      title: typeof f.title === "string" ? f.title : "",
+      reason,
+      chainLink: isChainLink,
+      chainGoals: isChainLink ? chainGoals : [],
+      _rank: isChainLink ? 0 : signal.rank,
+      _sev: sevRank(f.severity),
+      _conf: typeof f.confidence === "number" ? f.confidence : 0
+    });
+  }
+  out.sort((a, b) => a._rank - b._rank || a._sev - b._sev || b._conf - a._conf);
+  return out.slice(0, Math.max(0, max)).map(({ _rank, _sev, _conf, ...s }) => s);
+}
+
+// ../Extension/chrome-boiler/src/utils/reconDigest.js
+function buildReconDigest(delta, opts) {
+  const { scope, allFindings, max = 5 } = opts && typeof opts === "object" ? opts : {};
+  const d = delta && typeof delta === "object" ? delta : {};
+  const newHosts = Array.isArray(d.newHosts) ? d.newHosts.filter((h) => typeof h === "string") : [];
+  const newEndpoints = Array.isArray(d.newEndpoints) ? d.newEndpoints.filter((e) => typeof e === "string") : [];
+  const newFindings = Array.isArray(d.newFindings) ? d.newFindings.filter(Boolean) : [];
+  const useAll = Array.isArray(allFindings) && allFindings.length > 0;
+  const pool = useAll ? allFindings : newFindings;
+  const newIds = new Set(newFindings.map((f) => f && f.id).filter((id) => id != null).map(String));
+  const ranked = detectEscalationSignals(pool, { scope, max: Math.max(max * 2, 10) });
+  const topMoves = (useAll ? ranked.filter((s) => newIds.has(String(s.findingId))) : ranked).slice(0, max);
+  const counts = { hosts: newHosts.length, endpoints: newEndpoints.length, findings: newFindings.length };
+  const empty = !counts.hosts && !counts.endpoints && !counts.findings;
+  const summary = empty ? "No new attack surface since the last run." : `${counts.hosts} new host(s), ${counts.endpoints} new endpoint(s), ${counts.findings} new finding(s)` + (topMoves.length ? ` \u2014 ${topMoves.length} worth a look first.` : ".");
+  return {
+    empty,
+    counts,
+    newHosts: newHosts.slice(0, max),
+    newEndpoints: newEndpoints.slice(0, max),
+    topMoves,
+    summary
+  };
+}
+function formatReconDigest(digest) {
+  const d = digest && typeof digest === "object" ? digest : {};
+  if (d.empty || !d.summary) return "Recon: no new attack surface since the last run.";
+  const lines = [`\u{1F52D} Recon digest \u2014 ${d.summary}`];
+  if (Array.isArray(d.newHosts) && d.newHosts.length) lines.push("New hosts: " + d.newHosts.join(", "));
+  if (Array.isArray(d.newEndpoints) && d.newEndpoints.length) lines.push("New endpoints: " + d.newEndpoints.join(", "));
+  if (Array.isArray(d.topMoves) && d.topMoves.length) {
+    lines.push("Look at first:");
+    for (const m of d.topMoves) lines.push(`\u2022 ${m.title || m.type} \u2014 ${m.reason}`);
+  }
+  return lines.join("\n");
+}
+
 // ../Extension/chrome-boiler/src/utils/reportBuilder.js
 var REPORT_PLATFORMS = [
   { id: "hackerone", label: "HackerOne" },
@@ -1528,11 +1687,13 @@ export {
   EMPTY_SCOPE,
   REPORT_PLATFORMS,
   buildPocScaffold,
+  buildReconDigest,
   buildReport,
   draftChainNarrative,
   evaluateScope,
   executeReconTool,
   finalizeTriage,
+  formatReconDigest,
   hostFromUrl,
   isInScope,
   makeAgentClient,
