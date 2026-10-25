@@ -1274,6 +1274,68 @@ async function proposeChains(findings, { chat: chat2, model, scope } = {}) {
   return { chains: deduped, rejected, source };
 }
 
+// ../Extension/chrome-boiler/src/utils/chainNarrative.js
+function str4(v, max = 400) {
+  return typeof v === "string" ? v.slice(0, max) : v == null ? "" : String(v).slice(0, max);
+}
+function clip2(v, max = 400) {
+  return str4(v, max).replace(/\s+/g, " ").trim();
+}
+function safeParse3(text) {
+  if (typeof text !== "string") return null;
+  let t = text.trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) t = fence[1].trim();
+  if (!t.startsWith("{")) {
+    const i = t.indexOf("{");
+    const j = t.lastIndexOf("}");
+    if (i !== -1 && j > i) t = t.slice(i, j + 1);
+  }
+  try {
+    return JSON.parse(t);
+  } catch (_) {
+    return null;
+  }
+}
+function buildChainNarrativePrompt(chain) {
+  const c = chain || {};
+  const steps = (Array.isArray(c.steps) ? c.steps : []).map((s) => str4(s && s.type, 40)).join(" \u2192 ");
+  const hosts = Array.isArray(c.hosts) ? c.hosts.join(", ") : "";
+  const content = `You are a penetration tester writing the IMPACT section of a bug-bounty report for a VALIDATED exploit chain \u2014 every step below is a real, confirmed, in-scope finding. Write concise, credible business-impact prose for a triager. Do NOT invent steps or findings beyond those listed, and do NOT overstate. The severity is authoritative and set by the tool \u2014 do NOT change it. Return JSON only: {"summary":"<1-2 sentences>","impact":"<realistic business impact>","remediation":"<concrete fix>","cvss":"<CVSS:3.1/... vector or empty>"}.
+
+Chain: ${clip2(c.title, 160)}
+Severity (authoritative, do not change): ${str4(c.severity, 20)}
+Steps: ${steps}
+` + (hosts ? `Hosts: ${clip2(hosts, 200)}
+` : "") + (c.rationale ? `Why plausible: ${clip2(c.rationale, 240)}
+` : "") + "\nJSON only:";
+  return [{ role: "user", content }];
+}
+async function draftChainNarrative(chain, { chat: chat2, model } = {}) {
+  const c = chain || {};
+  const severity = c.severity || "informational";
+  const fail2 = { source: "error", summary: "", impact: "", remediation: "", cvss: null, severity };
+  if (!Array.isArray(c.steps) || c.steps.length < 2) return fail2;
+  const call = chat2 || chat;
+  try {
+    const reply = await call(buildChainNarrativePrompt(c), model);
+    const parsed = safeParse3(reply);
+    if (!parsed) return fail2;
+    return {
+      source: "llm",
+      summary: clip2(parsed.summary, 400),
+      impact: clip2(parsed.impact, 500),
+      remediation: clip2(parsed.remediation, 400),
+      // Model CVSS is kept only as a validated display label; the chain's own
+      // aiCvss is the fallback. Severity is never taken from the model.
+      cvss: validateCvss(parsed.cvss) || c.aiCvss || null,
+      severity
+    };
+  } catch (_) {
+    return fail2;
+  }
+}
+
 // ../Extension/chrome-boiler/src/utils/reportBuilder.js
 var REPORT_PLATFORMS = [
   { id: "hackerone", label: "HackerOne" },
@@ -1397,6 +1459,7 @@ export {
   EMPTY_SCOPE,
   REPORT_PLATFORMS,
   buildReport,
+  draftChainNarrative,
   evaluateScope,
   executeReconTool,
   finalizeTriage,
