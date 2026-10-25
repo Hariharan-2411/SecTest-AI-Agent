@@ -58,6 +58,29 @@ cp .env.example .env            # set AGENT_TOKEN + LLM creds
 docker compose up --build       # brings up agent + orchestrator; dashboard on 127.0.0.1:8790
 ```
 
+### Keeping the images patched (manual)
+
+Both images use a digest-pinned `node:22-trixie-slim` base, `apt upgrade`, and install
+tools at `@latest`, and both run as a non-root `node` user. To pull newly-released
+patches you must bypass the layer cache — a plain rebuild reuses the cached
+`apt upgrade`/`@latest` layers and gets nothing new:
+
+```bash
+# Orchestrator
+cd iris-orchestrator && npm run bundle
+docker build --no-cache -t iris-orchestrator-orchestrator:latest .
+
+# Agent (its 16+ tools reinstall at @latest → picks up upstream security fixes)
+cd ../Extension/chrome-boiler/agent
+docker build --no-cache -t iris-orchestrator-agent:latest .
+```
+
+Patching costs no runtime performance. Residual CVEs in the agent are inside the
+security tools' own dependencies + chromium (gowitness) — they clear only as the
+tool authors / Debian ship fixes, which a `--no-cache` rebuild then pulls in. To also
+move to a newer base, re-pull `node:22-trixie-slim`, take its new digest, and bump the
+`FROM` line. Scan anytime with `docker scout quickview <image>`.
+
 ## Dual-model planner / critic (optional)
 
 A second model can review every planned step before it runs. Set the `CRITIC_*`
