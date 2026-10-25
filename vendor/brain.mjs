@@ -682,6 +682,56 @@ function finalizeTriage(findings, { crossHost = false, minConfidence } = {}) {
   return { ranked, reportworthy, summary: summarizeFindings(ranked) };
 }
 
+// ../Extension/chrome-boiler/src/utils/fingerprint.js
+var SIGNATURES = [
+  { tech: "WordPress", tools: ["wpscan"], url: /\/wp-(login|admin|content|includes|json)|\/xmlrpc\.php/i, type: /wordpress|wp-/i },
+  { tech: "GraphQL", tools: ["nuclei"], note: "graphql templates", url: /\/graphql|\/graphiql/i, type: /graphql/i },
+  { tech: "S3 bucket", tools: ["s3scanner"], url: /s3[.-][a-z0-9-]*\.amazonaws\.com|\.s3\./i, type: /\bs3\b|bucket/i },
+  { tech: "Exposed .git", tools: ["nuclei"], note: "exposure templates", url: /\/\.git(\/|$)/i, type: /git-expos/i },
+  { tech: "JWT", tools: ["jwt_tool"], type: /jwt/i },
+  { tech: "Subdomain takeover", tools: ["subzy"], type: /takeover|dangling|cname/i }
+];
+var PARAM_URL = /\?[^=\s&]+=/;
+function urlStrings(surface) {
+  const raw = surface && Array.isArray(surface.urls) ? surface.urls : [];
+  return raw.map((u) => typeof u === "string" ? u : u && (u.url || u.loc || u.endpoint)).filter((u) => typeof u === "string");
+}
+function fingerprintStack(context) {
+  const ctx = context && typeof context === "object" ? context : {};
+  const urls = urlStrings(ctx.surface);
+  const findings = Array.isArray(ctx.findings) ? ctx.findings : [];
+  const byHost = {};
+  const seen = /* @__PURE__ */ new Set();
+  const suggestions = [];
+  const add = (tech, host, tools, note) => {
+    const key = `${tech}|${host || ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    suggestions.push({ tech, host: host || "", tools, ...note ? { note } : {} });
+    const h = host || "*";
+    byHost[h] = byHost[h] || { tech: [], tools: [] };
+    if (!byHost[h].tech.includes(tech)) byHost[h].tech.push(tech);
+    for (const t of tools) if (!byHost[h].tools.includes(t)) byHost[h].tools.push(t);
+  };
+  for (const sig of SIGNATURES) {
+    if (sig.url) {
+      for (const u of urls) if (sig.url.test(u)) add(sig.tech, hostFromUrl(u), sig.tools, sig.note);
+    }
+    if (sig.type) for (const f of findings) {
+      const t = `${f && (f.type || f.name || f.title) || ""}`;
+      if (sig.type.test(t)) add(sig.tech, f && (f.host || f.target), sig.tools, sig.note);
+    }
+  }
+  for (const u of urls) if (PARAM_URL.test(u)) add("Parametered endpoint", hostFromUrl(u), ["sqlmap", "dalfox", "arjun"], "test the exact URL");
+  return { byHost, suggestions };
+}
+function formatFingerprint(fp) {
+  const s = fp && Array.isArray(fp.suggestions) ? fp.suggestions : [];
+  if (!s.length) return "";
+  const parts = s.map((x) => `${x.tech}${x.host ? ` on ${x.host}` : ""} \u2192 ${x.tools.join("/")}${x.note ? ` (${x.note})` : ""}`);
+  return `Detected tech \u2192 run the matching tool: ${parts.join("; ")}. `;
+}
+
 // stub:stub-aiprovider
 var nope = () => {
   throw new Error("aiProvider not available server-side \u2014 inject chat");
@@ -790,7 +840,7 @@ function buildReconPrompt(context = {}) {
   const toolErrors = executed.filter((e) => e && e.ran && (e.error || e.ok === false)).slice(-6).map((e) => `${e.call && e.call.tool}:${e.call && e.call.target} \u2192 ${String(e.error || "failed").replace(/\s+/g, " ").slice(0, 80)}`);
   const content = `You are a bug-bounty recon planner. Goal: enumerate in-scope assets and surface known vulnerabilities using ONLY the allowed tools, staying strictly in scope. Allowed tools: ${Object.keys(RECON_TOOLS).join(
     ", "
-  )}. Profiles: ${RECON_PROFILES.join(", ")}. In-scope targets: ${targets.join(", ") || "(none)"}. Known endpoints (use these EXACT URLs as the target when scanning, keeping their scheme and port): ${seedUrls.join(", ") || "(none)"}. Already run: ${done.join(", ") || "(none)"}. Discovered so far: ${(s.subdomains || []).length} subdomains, ${(s.hosts || []).length} hosts, ${(s.urls || []).length} urls, ${(s.ports || []).length} ports; ${(context.findings || []).length} findings. Budget remaining: ${remaining} tool runs. Findings so far: ${findingDigest.join("; ") || "(none yet)"}. ` + (toolErrors.length ? `Recent tool failures (do NOT blindly re-run these on the same target): ${toolErrors.join("; ")}. ` : "") + 'REACT TO THE EVIDENCE ABOVE: let the specific findings drive the next steps \u2014 e.g. a login/auth endpoint \u2192 auth/JWT tests; a parametered URL \u2192 injection tools; a detected CMS/tech \u2192 its dedicated tool; a tool that failed \u2192 try a different tool or target, not the same one again. STRATEGY: discovery is only the first step \u2014 do NOT spend the whole budget enumerating. As soon as you have endpoints (the Known endpoints above, or once katana/gau/httpx have run), spend most of the remaining budget TESTING those exact endpoint URLs for vulnerabilities with the vuln/injection tools: nuclei, dalfox (XSS), sqlmap (SQLi), crlfuzz (CRLF), sstimap (SSTI), commix (command injection), jwt_tool, subzy (takeover), s3scanner, wpscan. Target the discovered endpoint URLs, not just the root. Propose the next 1-3 recon steps as JSON only: {"steps":[{"tool","target","profile"}],"done":false}. Reference only in-scope targets and allowed tools. Set done:true only when both discovery AND vuln testing of the endpoints are done. JSON only:';
+  )}. Profiles: ${RECON_PROFILES.join(", ")}. In-scope targets: ${targets.join(", ") || "(none)"}. Known endpoints (use these EXACT URLs as the target when scanning, keeping their scheme and port): ${seedUrls.join(", ") || "(none)"}. Already run: ${done.join(", ") || "(none)"}. Discovered so far: ${(s.subdomains || []).length} subdomains, ${(s.hosts || []).length} hosts, ${(s.urls || []).length} urls, ${(s.ports || []).length} ports; ${(context.findings || []).length} findings. Budget remaining: ${remaining} tool runs. Findings so far: ${findingDigest.join("; ") || "(none yet)"}. ` + (toolErrors.length ? `Recent tool failures (do NOT blindly re-run these on the same target): ${toolErrors.join("; ")}. ` : "") + formatFingerprint(fingerprintStack(context)) + (context.memory && Array.isArray(context.memory.paidOff) && context.memory.paidOff.length ? `Earlier runs on this target: these tools previously found bugs here \u2014 prioritize them: ${context.memory.paidOff.slice(0, 8).map((p) => `${p.tool}${p.count ? ` (x${p.count})` : ""}`).join(", ")}. ` : "") + 'REACT TO THE EVIDENCE ABOVE: let the specific findings drive the next steps \u2014 e.g. a login/auth endpoint \u2192 auth/JWT tests; a parametered URL \u2192 injection tools; a detected CMS/tech \u2192 its dedicated tool; a tool that failed \u2192 try a different tool or target, not the same one again. STRATEGY: discovery is only the first step \u2014 do NOT spend the whole budget enumerating. As soon as you have endpoints (the Known endpoints above, or once katana/gau/httpx have run), spend most of the remaining budget TESTING those exact endpoint URLs for vulnerabilities with the vuln/injection tools: nuclei, dalfox (XSS), sqlmap (SQLi), crlfuzz (CRLF), sstimap (SSTI), commix (command injection), jwt_tool, subzy (takeover), s3scanner, wpscan. Target the discovered endpoint URLs, not just the root. Propose the next 1-3 recon steps as JSON only: {"steps":[{"tool","target","profile"}],"done":false}. Reference only in-scope targets and allowed tools. Set done:true only when both discovery AND vuln testing of the endpoints are done. JSON only:';
   return { messages: [{ role: "user", content }] };
 }
 async function planReconStep(context, { chat: chat2, model } = {}) {
@@ -847,7 +897,8 @@ async function runReconLoop({
   budget = DEFAULT_RECON_BUDGET,
   maxDepth = MAX_RECON_DEPTH,
   seeds = [],
-  critique
+  critique,
+  memory = null
 } = {}) {
   const seedUrls = (Array.isArray(seeds) ? seeds : []).filter(
     (u) => typeof u === "string" && u.trim()
@@ -860,7 +911,10 @@ async function runReconLoop({
     // Seed known endpoints (with scheme/port) so the planner can target them
     // directly — in-scope hosts alone can't carry a non-standard port/scheme.
     surface: { subdomains: [], urls: [...seedUrls], hosts: [], ports: [] },
-    findings: []
+    findings: [],
+    // Cross-run memory: what earlier runs on this target discovered + which tools
+    // paid off. The planner uses it to start warm, not cold. null → first run.
+    memory: memory && typeof memory === "object" ? memory : null
   };
   const executedKeys = /* @__PURE__ */ new Set();
   const approveFn = typeof approve === "function" ? approve : async () => false;
@@ -1596,6 +1650,52 @@ function escalationBudgetFor(finding) {
   return BAND_PLAN[band] || BAND_PLAN.likely;
 }
 
+// ../Extension/chrome-boiler/src/utils/findingValidator.js
+var VERDICTS = ["confirmed", "likely", "false_positive"];
+function clip4(v, max = 400) {
+  return (typeof v === "string" ? v : v == null ? "" : String(v)).replace(/\s+/g, " ").trim().slice(0, max);
+}
+function safeParse4(text) {
+  if (typeof text !== "string") return null;
+  let t = text.trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) t = fence[1].trim();
+  if (!t.startsWith("{")) {
+    const i = t.indexOf("{");
+    const j = t.lastIndexOf("}");
+    if (i !== -1 && j > i) t = t.slice(i, j + 1);
+  }
+  try {
+    return JSON.parse(t);
+  } catch (_) {
+    return null;
+  }
+}
+function buildFindingValidationPrompt(finding) {
+  const f = finding || {};
+  const content = `You are a senior bug-bounty triager filtering FALSE POSITIVES from an automated scanner. Given ONE finding and its evidence, judge whether it is a TRUE positive worth a human triager\u2019s time. Be skeptical of generic, low-confidence, or evidence-free signals; do NOT dismiss a finding that has concrete, specific evidence. Return JSON only: {"verdict":"confirmed|likely|false_positive","reason":"<short>"}.
+
+Type: ${clip4(f.type || f.name || f.title, 60)}
+Host: ${clip4(f.host || f.target, 120)}
+Severity: ${clip4(f.severity, 20)}
+Confidence: ${f.confidence == null ? "" : f.confidence}
+Evidence: ${clip4(f.matched || f.evidence, 400) || "(none provided)"}
+
+JSON only:`;
+  return [{ role: "user", content }];
+}
+async function validateFinding2(finding, { chat: chat2, model } = {}) {
+  const call = chat2 || chat;
+  const keep = { verdict: "likely", reason: "", source: "default" };
+  try {
+    const parsed = safeParse4(await call(buildFindingValidationPrompt(finding), model));
+    if (!parsed || !VERDICTS.includes(parsed.verdict)) return keep;
+    return { verdict: parsed.verdict, reason: clip4(parsed.reason, 200), source: "llm" };
+  } catch (_) {
+    return keep;
+  }
+}
+
 // ../Extension/chrome-boiler/src/utils/reportBuilder.js
 var REPORT_PLATFORMS = [
   { id: "hackerone", label: "HackerOne" },
@@ -1737,5 +1837,6 @@ export {
   planReconStep,
   proposeChains,
   runReconLoop,
-  stricterDecision
+  stricterDecision,
+  validateFinding2 as validateFinding
 };

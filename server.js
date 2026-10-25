@@ -17,6 +17,7 @@ import { createLlm, createCritic } from './lib/llm.js';
 import { createBot } from './lib/bot.js';
 import { createRunner } from './lib/run.js';
 import { createMonitor } from './lib/monitor.js';
+import { createMemory } from './lib/memory.js';
 import { buildEngagement } from './lib/intake.js';
 import { importScope } from './lib/scopeImport.js';
 import { renderReport } from './lib/report.js';
@@ -47,7 +48,8 @@ const broker = createApprovalBroker({
 const llm = createLlm(env);
 const critic = createCritic(env);
 const bot = createBot({ env, broker });
-const runner = createRunner({ env, broker, llm, critic, bot, audit, killswitch, runs: runsStore, findingsStore, chainsStore, fingerprintsStore, evidenceStore });
+const memory = createMemory({ store: collection('memory') });
+const runner = createRunner({ env, broker, llm, critic, bot, audit, killswitch, memory, runs: runsStore, findingsStore, chainsStore, fingerprintsStore, evidenceStore });
 const monitorsStore = collection('monitors');
 const monitor = createMonitor({ runner, store: monitorsStore, audit, killswitch, bot });
 
