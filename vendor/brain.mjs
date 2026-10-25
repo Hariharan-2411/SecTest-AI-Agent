@@ -732,6 +732,47 @@ function formatFingerprint(fp) {
   return `Detected tech \u2192 run the matching tool: ${parts.join("; ")}. `;
 }
 
+// ../Extension/chrome-boiler/src/utils/endpointHarvest.js
+var QUOTED_PATH = /['"`](\/[A-Za-z0-9_\-./~]{1,180}(?:\?[^'"`\s]{0,180})?)['"`]/g;
+var ABS_URL = /https?:\/\/[A-Za-z0-9.\-]+(?::\d+)?(\/[^\s'"`<>()]{0,200})?/g;
+var STATIC = /\.(js|mjs|css|map|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot|pdf|zip|mp4|woff)(\?|$)/i;
+function originOf(base) {
+  try {
+    const u = new URL(base);
+    return `${u.protocol}//${u.host}`;
+  } catch (_) {
+    return typeof base === "string" ? base.replace(/\/+$/, "") : "";
+  }
+}
+function extractEndpoints(text, base, scope) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  if (typeof text !== "string" || !text) return out;
+  const origin = originOf(base);
+  const add = (url) => {
+    if (!url || seen.has(url) || STATIC.test(url)) return;
+    try {
+      if (!isInScope(url, scope || { inScope: [], outOfScope: [] })) return;
+    } catch (_) {
+      return;
+    }
+    seen.add(url);
+    out.push(url);
+  };
+  let m;
+  QUOTED_PATH.lastIndex = 0;
+  while (m = QUOTED_PATH.exec(text)) {
+    const path = m[1];
+    if (/^\/\//.test(path)) continue;
+    if (origin) add(origin + path);
+  }
+  ABS_URL.lastIndex = 0;
+  while (m = ABS_URL.exec(text)) {
+    add(m[0]);
+  }
+  return out.slice(0, 50);
+}
+
 // stub:stub-aiprovider
 var nope = () => {
   throw new Error("aiProvider not available server-side \u2014 inject chat");
@@ -868,7 +909,7 @@ async function planReconStep(context, { chat: chat2, model } = {}) {
     return { steps: [], done: true };
   }
 }
-function mergeResult(context, result) {
+function mergeResult(context, result, base) {
   if (!result || !result.ok) return;
   for (const f of result.findings || []) context.findings.push(f);
   const bucket = SURFACE_BUCKET[result.kind];
@@ -883,6 +924,17 @@ function mergeResult(context, result) {
       if (!seen.has(key)) {
         seen.add(key);
         context.surface[bucket].push(it);
+      }
+    }
+  }
+  if (base && typeof result.raw === "string" && result.raw) {
+    const have = new Set(
+      context.surface.urls.map((x) => typeof x === "string" ? x : JSON.stringify(x))
+    );
+    for (const ep of extractEndpoints(result.raw, base, context.scope)) {
+      if (!have.has(ep)) {
+        have.add(ep);
+        context.surface.urls.push(ep);
       }
     }
   }
@@ -973,7 +1025,7 @@ async function runReconLoop({
         const result = await executeReconTool(d.call, { agentClient });
         context.budgetUsed++;
         ranAny = true;
-        mergeResult(context, result);
+        mergeResult(context, result, d.call.target);
         context.executed.push({
           decision: d.decision,
           call: d.call,
@@ -1016,7 +1068,7 @@ async function runReconLoop({
         executedKeys.add(key);
         const result = await executeReconTool(nd.call, { agentClient });
         injected++;
-        mergeResult(context, result);
+        mergeResult(context, result, nd.call.target);
         context.executed.push({ decision: nd.decision, call: nd.call, ran: true, ok: result.ok, error: result.error, found: (result.findings || []).length, command: result.command || "", rawExcerpt: result.raw || "", evidence: result.evidence || null, pass: "injection" });
       }
     }
