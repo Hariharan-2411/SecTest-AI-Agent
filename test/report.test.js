@@ -11,6 +11,16 @@ test('renders markdown for a finding including its name', () => {
 test('null item → null (no fabrication)', () => {
   assert.equal(renderReport(null), null);
 });
+test('a finding with no steps gets a type-aware PoC scaffold (repro steps + command)', () => {
+  const md = renderReport({ name: 'Boolean SQLi', severity: 'high', type: 'sqli-boolean', target: 'http://h/s?q=1', param: 'q', matched: 'response differs' });
+  assert.match(md, /boolean/i);   // the type-aware reproduction step
+  assert.match(md, /curl/);       // the repro command template
+});
+test('an unrecognized finding type still gets a generic reproduction step', () => {
+  const md = renderReport({ name: 'Odd thing', severity: 'low', type: 'misc', target: 'http://h', matched: 'x' });
+  assert.match(md, /Steps To Reproduce/i);
+  assert.match(md, /reproduce/i); // generic scaffold line, not the empty placeholder
+});
 test('renders a chain (has steps) without throwing', () => {
   const md = renderReport({ title: 'XSS to ATO', severity: 'critical', steps: [{}, {}], rationale: 'token leak' });
   assert.ok(typeof md === 'string' && md.length > 0);
