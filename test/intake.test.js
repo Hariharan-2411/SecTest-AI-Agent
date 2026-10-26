@@ -18,6 +18,12 @@ test('fail-closed: unconfirmed → safe only', () => {
   assert.equal(e.policy.maxRisk, 'safe');
 });
 
+test('rateMax flows into policy (0 default, clamped to >=0)', () => {
+  assert.equal(buildEngagement({ urls: ['https://a.example.com'] }, helpers).policy.rateMax, 0);
+  assert.equal(buildEngagement({ urls: ['https://a.example.com'], rateMax: 5 }, helpers).policy.rateMax, 5);
+  assert.equal(buildEngagement({ urls: ['https://a.example.com'], rateMax: -3 }, helpers).policy.rateMax, 0);
+});
+
 test('passive flag → mode "passive" (default is "full")', () => {
   const p = buildEngagement({ urls: ['https://a.example.com'], passive: true }, helpers);
   assert.equal(p.mode, 'passive');

@@ -64,6 +64,8 @@
     <div class="row"><input type="checkbox" id="destructive" /><label style="margin:0">Also allow destructive tools (explicit opt-in)</label></div>
     <div class="row"><input type="checkbox" id="fullev" /><label style="margin:0">Full evidence (capture request/response via proxy) — else Light (command + output)</label></div>
     <div class="row"><input type="checkbox" id="passive" /><label style="margin:0"><b>Passive / recon-only</b> — OSINT sources only, <b>no traffic to the target</b> (safe for programs that forbid scanning)</label></div>
+    <label>Max requests/sec per tool — rate-limit for programs that cap req/s (0 or blank = tool defaults)</label>
+    <input id="ratemax" type="number" min="0" placeholder="0" />
     <label>Monitor interval (minutes) — re-run on a schedule, alert only on NEW findings</label>
     <input id="interval" type="number" min="1" placeholder="360" />
     <div class="row">
@@ -133,6 +135,7 @@ function engagementBody(){
     allowDestructive: $('destructive').checked,
     evidenceMode: $('fullev').checked ? 'full' : 'light',
     passive: $('passive').checked,
+    rateMax: Number($('ratemax').value) || 0,
   };
 }
 async function startRun(monitor){

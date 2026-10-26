@@ -308,6 +308,7 @@ function makeAgentClient({
   baseUrl = "http://localhost:8787",
   token = "",
   evidence,
+  rate,
   fetchImpl
 } = {}) {
   const doFetch = fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
@@ -317,7 +318,8 @@ function makeAgentClient({
       const res = await doFetch(`${baseUrl}/scan`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-agent-token": token },
-        body: JSON.stringify({ tool, target, profile, ...evidence ? { evidence } : {} })
+        // `rate` (req/s) lets the agent cap target traffic per engagement.
+        body: JSON.stringify({ tool, target, profile, ...evidence ? { evidence } : {}, ...rate > 0 ? { rate } : {} })
       });
       let body = {};
       try {
