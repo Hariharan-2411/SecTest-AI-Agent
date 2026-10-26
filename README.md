@@ -58,6 +58,12 @@ cp .env.example .env            # set AGENT_TOKEN + LLM creds
 docker compose up --build       # brings up agent + orchestrator; dashboard on 127.0.0.1:8790
 ```
 
+> **Upgrading from a pre-hardening (root) build?** The images now run as non-root `node`.
+> A data volume first created by the old root container stays root-owned, so the non-root
+> process can't write it (`EACCES`). Recreate the volumes once: `docker compose down -v`
+> then `docker compose up -d` (fresh volumes initialize with `node` ownership). This clears
+> local run history; it's dev/test data.
+
 ### Keeping the images patched (manual)
 
 Both images use a digest-pinned `node:22-trixie-slim` base, `apt upgrade`, and install

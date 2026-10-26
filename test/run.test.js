@@ -83,6 +83,15 @@ test('aggregatePassive dedupes subdomains + urls and ignores failed/other result
   assert.deepEqual(out.urls, ['https://a.example.com/x?q=1']);
 });
 
+test('aggregatePassive unwraps the makeAgentClient {status, body} shape', () => {
+  const out = aggregatePassive([
+    { status: 200, body: { ok: true, kind: 'subdomains', items: ['api.example.com', 'www.example.com'] } },
+    { status: 200, body: { ok: true, kind: 'urls', items: ['https://www.example.com/'] } },
+  ]);
+  assert.deepEqual(out.subdomains, ['api.example.com', 'www.example.com']);
+  assert.deepEqual(out.urls, ['https://www.example.com/']);
+});
+
 test('a passive run only dispatches PASSIVE_TOOLS (never touches the target with active tools)', async () => {
   const dispatched = [];
   // Intercept the agent client by stubbing the brain import is hard; instead assert via a fake runner path:
